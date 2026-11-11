@@ -1,0 +1,34 @@
+# Deploy automático a cada push na main (gatilho do Cloud Build ligado ao GitHub).
+# 1) monta a imagem  2) envia ao Artifact Registry  3) roda as migrações
+# 4) publica a nova versão do backend.
+# As variáveis de ambiente (DATABASE_URL, SECRET_KEY, ...) ficam configuradas
+# no serviço e no job do Cloud Run e são mantidas entre os deploys.
+substitutions:
+  _REGION: us-central1
+  _IMAGE: us-central1-docker.pkg.dev/${PROJECT_ID}/itz/itz-api
+
+steps:
+  - id: build
+    name: gcr.io/cloud-builders/docker
+    args: ['build', '-t', '${_IMAGE}:${SHORT_SHA}', '-t', '${_IMAGE}:latest', '.']
+
+  - id: push
+    name: gcr.io/cloud-builders/docker
+    args: ['push', '--all-tags', '${_IMAGE}']
+
+  - id: migrate
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        gcloud run jobs update itz-migrate --image ${_IMAGE}:${SHORT_SHA} --region ${_REGION} &&
+        gcloud run jobs execute itz-migrate --region ${_REGION} --wait
+
+  - id: deploy
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: gcloud
+    args: ['run', 'deploy', 'itz-api', '--image', '${_IMAGE}:${SHORT_SHA}', '--region', '${_REGION}']
+
+options:
+  logging: CLOUD_LOGGING_ONLY

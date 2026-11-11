@@ -107,7 +107,10 @@ WSGI_APPLICATION = 'config.wsgi.application'
 DATABASES = {
     'default': dj_database_url.config(
         default=f"sqlite:///{BASE_DIR / 'db.sqlite3'}",
-        conn_max_age=600,
+        # O Neon hiberna após 5 min parado: reaproveita a conexão por pouco
+        # tempo e testa antes de usar, para não pegar uma conexão já morta.
+        conn_max_age=60,
+        conn_health_checks=True,
     )
 }
 
@@ -195,13 +198,11 @@ CSRF_TRUSTED_ORIGINS = [
     o for o in os.environ.get('CSRF_TRUSTED_ORIGINS', '').split(',') if o
 ]
 
-# O Render injeta o host público do serviço (ex.: itz-api.onrender.com).
-# Libera-o automaticamente para funcionar também na URL temporária, sem precisar
-# esperar o domínio próprio ficar ativo.
-_render_host = os.environ.get('RENDER_EXTERNAL_HOSTNAME')
-if _render_host:
-    ALLOWED_HOSTS.append(_render_host)
-    CSRF_TRUSTED_ORIGINS.append(f'https://{_render_host}')
+# No Google Cloud Run (que define K_SERVICE), libera a URL *.run.app do serviço:
+# o Admin funciona logo no primeiro deploy, antes do domínio próprio existir.
+if os.environ.get('K_SERVICE'):
+    ALLOWED_HOSTS.append('.run.app')
+    CSRF_TRUSTED_ORIGINS.append('https://*.run.app')
 
 # Django REST Framework — a API é só pública (site + matrícula); não há login
 # pela API. Cada view libera o acesso explicitamente com AllowAny; o padrão
@@ -272,7 +273,7 @@ SEDE_ENDERECO = os.environ.get(
 
 # --- Segurança HTTPS (aplicada apenas em produção, quando DEBUG=False) ---
 if not DEBUG:
-    # Render/Vercel terminam o TLS no proxy e encaminham este header.
+    # O Cloud Run termina o TLS no proxy e encaminha este header.
     SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
     SECURE_SSL_REDIRECT = env_bool('SECURE_SSL_REDIRECT', 'True')
     SESSION_COOKIE_SECURE = True

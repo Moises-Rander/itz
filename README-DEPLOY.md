@@ -1,125 +1,262 @@
-# Deploy do ITZ — Render (backend) + Vercel (frontend)
+# Deploy do ITZ: Cloud Run + Neon + Cloudflare
 
-Guia passo a passo para colocar o sistema no ar em `itzait.com.br`
-(troque pelo domínio escolhido — tudo é por variável de ambiente).
-
-Arquitetura:
+Passo a passo para colocar o sistema no ar em `itzait.com.br` gastando o mínimo
+possível (R$ 0/mês no volume esperado; só o domínio é pago).
 
 ```
-itzait.com.br        → Frontend (Vercel, estático)
-api.itzait.com.br    → Backend Django + gunicorn (Render)
-                        ├── PostgreSQL (Render)
-                        ├── Mídia → Cloudflare R2 (S3) — imagens públicas
-                        ├── Email → Resend/SES (SMTP)
-                        └── Asaas (produção) → webhook em /api/webhooks/asaas/
+itzait.com.br / www  → Frontend estático (Cloudflare Pages)
+api.itzait.com.br    → Backend Django (Google Cloud Run, escala a zero)
+admin.itzait.com.br  → o mesmo backend (abre direto no /admin/) — opcional
+cdn.itzait.com.br    → Imagens (Cloudflare R2)
+Banco                → Neon Postgres (hiberna sozinho)
+Email                → Resend (SMTP)
+Pagamentos           → Asaas → webhook em api.itzait.com.br/api/webhooks/asaas/
 ```
+
+| Serviço | Plano | Observação |
+|---|---|---|
+| Google Cloud Run | gratuito (2 mi req/mês) | pede cartão; configure alerta de orçamento |
+| Neon | Free | 1 GB; hiberna após 5 min parado (~1 s para acordar) |
+| Cloudflare Pages + R2 | Free | R2 grátis até 10 GB |
+| Resend | Free | limite diário de envios, folgado para matrículas |
+| registro.br | ~R$ 40/ano | domínio |
+
+> **Cold start**: com o backend parado, a primeira requisição leva poucos segundos
+> (Cloud Run + Neon acordando). A home já chama a API ao abrir, então quando o
+> aluno chega no checkout o servidor costuma estar acordado.
+
+Ordem recomendada: 1 → 9. Anote cada valor marcado com 📝: eles vão para o
+arquivo de variáveis do passo 6.
 
 ---
 
-## Pré-requisitos
-- Contas: **GitHub**, **Render**, **Vercel**, **Cloudflare** (R2 + DNS), **Resend** (email), **Asaas** (produção).
-- Node 20 para buildar o front localmente (`nvm use 20`).
+## 1. Domínio e DNS
 
----
+1. [registro.br](https://registro.br) → registre `itzait.com.br`.
+2. [Cloudflare](https://dash.cloudflare.com) → *Add a domain* → `itzait.com.br` → plano **Free**.
+3. No registro.br, troque os servidores DNS pelos dois *nameservers* que o
+   Cloudflare mostrar. A propagação pode levar algumas horas.
 
-## Passo 0 — Subir o código no GitHub
+## 2. Banco de dados — Neon
+
+1. [neon.com](https://neon.com) → crie a conta → *New project*:
+   - Nome: `itz` · Postgres: o mais recente · Região: **AWS US East (Ohio) — us-east-2**
+     (a mais próxima do Cloud Run em us-central1).
+2. *Connect* → desmarque **Connection pooling** → copie a connection string
+   (`postgresql://...neon.tech/neondb?sslmode=require`).
+   📝 `DATABASE_URL`
+
+## 3. Imagens — Cloudflare R2
+
+1. Cloudflare → **R2 Object Storage** (pode pedir um meio de pagamento; só cobra
+   acima do gratuito) → *Create bucket* `itz-media`.
+2. `itz-media` → *Settings* → *Custom Domains* → *Add* `cdn.itzait.com.br`.
+   📝 `AWS_S3_CUSTOM_DOMAIN=cdn.itzait.com.br`
+3. R2 → *Manage API Tokens* → *Create API token* → permissão **Object Read & Write**,
+   restrita ao bucket `itz-media`.
+   📝 `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` e o endpoint
+   `https://<ACCOUNT_ID>.r2.cloudflarestorage.com` (📝 `AWS_S3_ENDPOINT_URL`)
+
+## 4. Email — Resend
+
+1. [resend.com](https://resend.com) → *Domains* → *Add domain* `itzait.com.br`.
+2. Adicione no DNS do Cloudflare os registros que o Resend mostrar (SPF/DKIM) e
+   clique em *Verify*. Sem isso os emails caem no spam.
+3. *API Keys* → *Create* (permissão *Sending access*). 📝 `EMAIL_HOST_PASSWORD`
+   (host `smtp.resend.com`, porta 587, usuário `resend`).
+
+## 5. Google Cloud — projeto e conta
+
+1. [console.cloud.google.com](https://console.cloud.google.com) → crie o projeto **`itz`**.
+   📝 o **ID do projeto** (aparece no seletor de projetos; ex.: `itz-123456`).
+2. *Faturamento* → vincule um cartão.
+3. *Faturamento* → **Orçamentos e alertas** → *Criar orçamento* → R$ 5/mês,
+   alertas em 50 %, 90 % e 100 %. Você recebe email antes de qualquer cobrança.
+4. Abra o **Cloud Shell** (ícone `>_` no topo do console) e rode:
+
 ```bash
-cd /Users/moises/itz
-git init
-git add .
-git commit -m "ITZ: sistema completo (backend + frontend)"
-# crie um repositório vazio no GitHub e:
-git remote add origin git@github.com:SEU_USUARIO/itz.git
-git branch -M main
-git push -u origin main
+gcloud config set project SEU_PROJECT_ID
+gcloud services enable run.googleapis.com artifactregistry.googleapis.com cloudbuild.googleapis.com
+gcloud artifacts repositories create itz --repository-format=docker --location=us-central1
 ```
-Confirme que `.env`, `db.sqlite3`, `venv/`, `media/`, `staticfiles/`, `frontend/node_modules/` e `frontend/.env` **não** foram commitados.
 
-## Passo 1 — Comprar o domínio
-- **[registro.br](https://registro.br)** → registre `itzait.com.br` (~R$40/ano).
-- Recomendado: mover o DNS para o **Cloudflare** (grátis) — facilita subdomínios e CDN.
-  No Cloudflare: *Add site* → siga a troca de nameservers no registro.br.
+## 6. Backend no Cloud Run (primeiro deploy, manual)
 
-## Passo 2 — Storage de mídia (Cloudflare R2)
-Só há imagens públicas (cursos, professores, institucional) — um bucket basta.
+Ainda no Cloud Shell:
 
-1. Cloudflare → **Storage & databases → R2** → *Create bucket* `itz-media`.
-2. Tornar o bucket público:
-   - `itz-media → Settings → Custom Domains → Add` → `cdn.itzait.com.br` (requer o domínio no Cloudflare), **ou** `Public Development URL → Enable` (dá uma URL `pub-xxxx.r2.dev` para começar/testar).
-   - O domínio/URL público resultante vira `AWS_S3_CUSTOM_DOMAIN`.
-3. Credenciais: **R2 → Overview → `{ } API` → Manage API Tokens → Create** com permissão *Object Read & Write* (aplicada ao bucket). Anote `Access Key ID`, `Secret Access Key` e o **Endpoint S3** (`https://<ACCOUNT_ID>.r2.cloudflarestorage.com`).
-   - Variáveis: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_STORAGE_BUCKET_NAME=itz-media`, `AWS_S3_ENDPOINT_URL=...`, `AWS_S3_CUSTOM_DOMAIN=cdn.itzait.com.br` (ou a URL `pub-xxxx.r2.dev`).
+```bash
+git clone https://github.com/Moises-Rander/itz.git && cd itz
+gcloud builds submit --tag us-central1-docker.pkg.dev/$(gcloud config get project)/itz/itz-api:latest
+```
 
-## Passo 3 — Email (Resend)
-1. [resend.com](https://resend.com) → *Add Domain* `itzait.com.br` → adicione os registros **SPF/DKIM** no DNS (Cloudflare). Sem isso os emails caem no spam.
-2. Crie uma API key e obtenha as credenciais **SMTP** (host `smtp.resend.com`, porta `587`, user `resend`, senha = a API key).
+Crie o arquivo de variáveis **pelo editor do Cloud Shell** (botão *Abrir editor*),
+em `~/env.yaml` — fora da pasta do repositório, para nunca ser versionado:
 
-## Passo 4 — Backend no Render (Blueprint)
-1. Render → **New → Blueprint** → conecte o repo. O `render.yaml` cria o **Web Service** `itz-api` + o **Postgres** `itz-db`.
-2. Em **itz-api → Environment**, preencha as variáveis marcadas `sync:false`:
-   - Email: `EMAIL_HOST=smtp.resend.com`, `EMAIL_HOST_USER=resend`, `EMAIL_HOST_PASSWORD=<api key>`, `REITOR_EMAIL=<email do reitor>` (recebe os dados de cada nova matrícula).
-   - Asaas: `ASAAS_API_KEY=<chave de produção>`, `ASAAS_WEBHOOK_TOKEN=<gere um token forte>`.
-   - R2: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_STORAGE_BUCKET_NAME`, `AWS_S3_ENDPOINT_URL`, `AWS_S3_CUSTOM_DOMAIN`.
-   - (opcional) `SENTRY_DSN`.
-   - Confira que `DEBUG=False`, `ALLOWED_HOSTS=api.itzait.com.br`, `USE_S3=True` e as URLs de front/back estão certas.
-3. O deploy roda automaticamente: `collectstatic` + `migrate` (build) e `gunicorn` (start).
-4. **Domínio**: itz-api → *Settings → Custom Domains* → adicione `api.itzait.com.br` (Render dá o alvo do CNAME).
-5. **Superusuário**: itz-api → *Shell* →
-   ```bash
-   python manage.py createsuperuser
-   ```
+```yaml
+DEBUG: "False"
+SECRET_KEY: "cole uma chave longa e aleatória"   # gere com: python3 -c "import secrets;print(secrets.token_urlsafe(50))"
+ALLOWED_HOSTS: "api.itzait.com.br,admin.itzait.com.br"
+CSRF_TRUSTED_ORIGINS: "https://api.itzait.com.br,https://admin.itzait.com.br"
+CORS_ALLOWED_ORIGINS: "https://itzait.com.br,https://www.itzait.com.br"
+FRONTEND_URL: "https://itzait.com.br"
+BACKEND_URL: "https://api.itzait.com.br"
+NUM_PROXIES: "1"
+DATABASE_URL: "postgresql://...neon.tech/neondb?sslmode=require"
 
-## Passo 5 — Frontend no Vercel
-1. Vercel → **Add New → Project** → importe o repo → **Root Directory: `frontend`** (framework Vite, detectado).
-2. **Environment Variables**:
-   - `VITE_API_URL = https://api.itzait.com.br/api`
-   - `VITE_CONTATO_*`, `VITE_HERO_IMAGEM` etc. (veja `frontend/.env.example`).
-   > Vite "assa" essas variáveis no build — se mudar, faça *Redeploy*.
-3. Deploy. O `frontend/vercel.json` garante o fallback de SPA (deep links).
-4. **Domínio**: Vercel → *Settings → Domains* → adicione `itzait.com.br` e `www.itzait.com.br`.
+EMAIL_BACKEND: "django.core.mail.backends.smtp.EmailBackend"
+EMAIL_HOST: "smtp.resend.com"
+EMAIL_PORT: "587"
+EMAIL_HOST_USER: "resend"
+EMAIL_HOST_PASSWORD: "re_..."
+EMAIL_USE_TLS: "True"
+DEFAULT_FROM_EMAIL: "Instituto de Teologia Zait <noreply@itzait.com.br>"
+ADMIN_EMAIL: "secretaria@itzait.com.br"
+REITOR_EMAIL: "email-do-reitor@..."
+INSTITUICAO_NOME: "Instituto de Teologia Zait"
+INSTITUICAO_CONTATO_EMAIL: "contato@itzait.com.br"
+INSTITUICAO_CONTATO_TELEFONE: "(98) 98833-9224"
+SEDE_ENDERECO: "Rua Transjordânia, 235 - Recanto Vinhais, São Luís - MA, 65070-616"
 
-## Passo 6 — DNS (Cloudflare)
-| Tipo  | Nome | Valor |
-|-------|------|-------|
-| CNAME | `api` | alvo fornecido pelo Render |
-| A/CNAME | `@` (raiz) e `www` | alvos fornecidos pela Vercel |
-| CNAME | `cdn` | endpoint público do bucket R2 (se usar) |
-| TXT/CNAME | SPF/DKIM | fornecidos pelo Resend |
+# Comece pelo SANDBOX do Asaas; troque para produção depois do teste (passo 9).
+ASAAS_FAKE: "False"
+ASAAS_BASE_URL: "https://sandbox.asaas.com/api/v3"
+ASAAS_API_KEY: "$aact_..."
+ASAAS_WEBHOOK_TOKEN: "outra chave longa e aleatória"
 
-HTTPS é emitido automaticamente por Render e Vercel.
+USE_S3: "True"
+AWS_ACCESS_KEY_ID: "..."
+AWS_SECRET_ACCESS_KEY: "..."
+AWS_STORAGE_BUCKET_NAME: "itz-media"
+AWS_S3_ENDPOINT_URL: "https://<ACCOUNT_ID>.r2.cloudflarestorage.com"
+AWS_S3_CUSTOM_DOMAIN: "cdn.itzait.com.br"
+```
 
-## Passo 7 — Asaas (produção)
-1. Asaas → **Integrações → Webhooks** → *Adicionar*:
+Crie o job de migrações, rode-o e publique o backend:
+
+```bash
+IMG=us-central1-docker.pkg.dev/$(gcloud config get project)/itz/itz-api:latest
+
+gcloud run jobs create itz-migrate --image $IMG --region us-central1 \
+  --env-vars-file ~/env.yaml --command python --args manage.py,migrate
+gcloud run jobs execute itz-migrate --region us-central1 --wait
+
+gcloud run deploy itz-api --image $IMG --region us-central1 --allow-unauthenticated \
+  --env-vars-file ~/env.yaml --cpu 1 --memory 512Mi \
+  --min-instances 0 --max-instances 2 --cpu-boost
+```
+
+O deploy mostra a URL do serviço (`https://itz-api-....run.app`). Abra
+`<URL>/api/catalogo/` — deve responder `[]`.
+
+**Administrador** — no seu computador, apontando para o Neon (o
+`DATABASE_URL` só vale para este comando):
+
+```bash
+cd itz && source venv/bin/activate
+DATABASE_URL='postgresql://...neon.tech/neondb?sslmode=require' python manage.py createsuperuser
+```
+
+Depois apague o `env.yaml` do Cloud Shell: `rm ~/env.yaml`. As variáveis ficam
+guardadas no serviço e no job (para mudar uma depois: Cloud Run → `itz-api` →
+*Editar e implantar nova revisão* → *Variáveis*; repita no job `itz-migrate`).
+
+## 7. Domínio da API + deploy automático
+
+**Domínio `api.itzait.com.br`:**
+
+```bash
+gcloud domains verify itzait.com.br        # abre o Search Console: adicione o TXT no Cloudflare
+gcloud beta run domain-mappings create --service itz-api --domain api.itzait.com.br --region us-central1
+gcloud beta run domain-mappings create --service itz-api --domain admin.itzait.com.br --region us-central1   # opcional
+```
+
+No Cloudflare, crie os registros pedidos (normalmente `CNAME api → ghs.googlehosted.com`)
+com a **nuvem cinza (DNS only)** — o certificado HTTPS é emitido pelo Google
+(pode levar de 15 min a algumas horas).
+
+**Deploy automático a cada push na `main`:**
+
+1. Dê ao Cloud Build permissão para publicar:
+
+```bash
+PN=$(gcloud projects describe $(gcloud config get project) --format='value(projectNumber)')
+SA=$PN-compute@developer.gserviceaccount.com
+for R in run.admin iam.serviceAccountUser artifactregistry.writer logging.logWriter; do
+  gcloud projects add-iam-policy-binding $(gcloud config get project) --member serviceAccount:$SA --role roles/$R
+done
+```
+
+2. Console → **Cloud Build** → *Gatilhos* → *Conectar repositório* → GitHub →
+   `Moises-Rander/itz` → *Criar gatilho*:
+   - Região `us-central1` · Evento: *Push para uma ramificação* · Ramificação `^main$`
+   - Configuração: *Arquivo do Cloud Build* → `cloudbuild.yaml`
+   - Conta de serviço: a **Compute Engine default service account** (`...-compute@developer...`)
+
+A partir daí, cada push na `main` monta a imagem, roda as migrações e publica.
+
+## 8. Frontend — Cloudflare Pages
+
+1. Cloudflare → **Workers & Pages** → *Create* → *Pages* → *Connect to Git* →
+   `Moises-Rander/itz`.
+2. Configuração de build:
+   - *Framework preset*: Vite · *Build command*: `npm run build`
+   - *Build output directory*: `dist` · *Root directory*: `frontend`
+3. *Environment variables* (Production):
+   - `NODE_VERSION` = `22`
+   - `VITE_API_URL` = `https://api.itzait.com.br/api`
+   - `VITE_CONTATO_EMAIL`, `VITE_CONTATO_TELEFONE`, `VITE_CONTATO_WHATSAPP`,
+     `VITE_CONTATO_INSTAGRAM`, `VITE_CONTATO_ENDERECO`, `VITE_CONTATO_MAPA_COORDS`,
+     `VITE_HERO_IMAGEM` (veja `frontend/.env.example`).
+   > O Vite grava essas variáveis no build: se mudar alguma, faça *Retry deployment*.
+4. *Custom domains* → adicione `itzait.com.br` e `www.itzait.com.br`.
+
+O arquivo `frontend/public/_redirects` já faz as rotas internas (ex.: `/cursos/hebraico-basico`)
+funcionarem ao recarregar a página. Cada push na `main` publica o frontend sozinho.
+
+## 9. Asaas
+
+1. Asaas (sandbox primeiro) → **Integrações → Webhooks** → *Adicionar*:
    - URL: `https://api.itzait.com.br/api/webhooks/asaas/`
-   - Token de autenticação: **o mesmo** valor de `ASAAS_WEBHOOK_TOKEN`.
-   - Eventos: `PAYMENT_CONFIRMED` e `PAYMENT_RECEIVED`.
-2. Teste com um pagamento real de valor baixo (ou primeiro em sandbox com `ASAAS_FAKE`/sandbox key).
+   - Token de autenticação: o mesmo `ASAAS_WEBHOOK_TOKEN` do passo 6
+   - Eventos: `PAYMENT_CONFIRMED` e `PAYMENT_RECEIVED`
+2. Cadastre um curso de teste no Admin e faça uma matrícula com PIX e outra com
+   cartão (cartões de teste na documentação do Asaas).
+3. Deu certo? Troque para produção: `ASAAS_BASE_URL=https://api.asaas.com/v3` e a
+   chave de produção (no serviço **e** no job), e repita o cadastro do webhook na
+   conta de produção.
 
-## Passo 8 — Conteúdo inicial (Django Admin)
-Acesse `https://api.itzait.com.br/admin/` e cadastre:
+## 10. Conteúdo inicial (Admin)
+
+Acesse `https://api.itzait.com.br/admin/` e cadastre, nesta ordem:
+
 1. **Professores** (marque *exibir na home* para os destaques).
 2. **Cursos** (cada disciplina avulsa: ementa, carga horária, imagem).
 3. **Graduações** → módulos (na própria tela) → *editar cursos* de cada módulo.
 4. **Turmas de curso**: datas, vagas, preço, professores e horários. Status *Publicada* para aparecer.
 5. **Turmas de graduação**: escolha uma turma de curso para cada curso da grade e o preço do pacote.
 6. **Taxas de parcelamento** (acréscimo de 2x a 12x repassado ao aluno; sem linha = sem juros).
-7. Opcional: **Promoções** e **Cupons**.
-- **Conteúdo institucional** (seções `HERO`, `SOBRE`, `MISSAO`, `VISAO`, `VALORES`), **Membros da equipe** e **Depoimentos** — lembre de marcar *publicado/ativo*.
+7. **Conteúdo institucional** (`HERO`, `SOBRE`, `MISSAO`, `VISAO`, `VALORES`),
+   **Membros da equipe** e **Depoimentos**.
+8. Opcional: **Promoções** e **Cupons**.
 
-## Passo 9 — Checklist final
-- [ ] `https://itzait.com.br` abre e consome a API (Home mostra cursos/depoimentos).
-- [ ] Login no `/admin/` funciona sob HTTPS (cookies seguros).
-- [ ] Matrícula de teste com PIX (valor baixo): QR Code → pagamento → página confirma sozinha → emails "matrícula confirmada" (aluno) e "nova matrícula" (reitor).
-- [ ] Matrícula de teste com cartão parcelado; depois *Cancelar e estornar* no Admin e confira o estorno no Asaas.
+## 11. Checklist final
+
+- [ ] `https://itzait.com.br` abre e mostra os cursos (consome a API).
+- [ ] Login no `/admin/` funciona sob HTTPS.
+- [ ] Matrícula com PIX (valor baixo): QR Code → pagamento → página confirma sozinha →
+      emails "matrícula confirmada" (aluno) e "nova matrícula" (reitor).
+- [ ] Matrícula com cartão parcelado; depois *Cancelar e estornar* no Admin e confira o estorno no Asaas.
 - [ ] Emails chegam (não no spam) — SPF/DKIM ok.
+- [ ] Imagem enviada no Admin aparece no site (R2 + `cdn.itzait.com.br`).
 
 ---
 
 ## Manutenção
-- **Migrações**: a cada `git push` na `main`, o Render re-builda e roda `migrate` automaticamente.
-- **Backups**: ative o backup automático do Postgres no Render; no R2, ative *versioning* do bucket.
-- **Logs/erros**: veja logs no Render; configure `SENTRY_DSN` para alertas de erro.
-- **Rodar testes localmente**: `python manage.py test`.
 
-## Alternativa: VPS + Docker
-Se preferir um único servidor (mais barato em escala, mais trabalho): VPS (Hetzner/DigitalOcean) + Docker Compose (gunicorn + Postgres + Nginx) + Certbot para HTTPS. Posso gerar os `Dockerfile`/`docker-compose.yml`/Nginx se optar por esse caminho.
+- **Deploy**: `git push` na `main` → Cloud Build (backend + migrações) e Cloudflare Pages (frontend).
+- **Logs/erros**: Cloud Run → `itz-api` → *Registros*. Para alertas, configure `SENTRY_DSN`.
+- **Custos**: o alerta de orçamento avisa. `--max-instances 2` limita o gasto mesmo com picos.
+- **Backup**: o Neon guarda o histórico recente e permite restaurar um ponto no tempo;
+  para algo permanente, rode periodicamente
+  `pg_dump "$DATABASE_URL" > backup-$(date +%F).sql` no seu computador.
+- **Testes locais**: `python manage.py test`.
