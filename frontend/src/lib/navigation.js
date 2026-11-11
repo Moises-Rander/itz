@@ -5,7 +5,7 @@ export const NAV_LINKS = [
     label: 'Cursos',
     to: '/cursos',
     children: [
-      { label: 'Graduações', to: '/cursos?tipo=graduacao' },
+      { label: 'Formações', to: '/cursos?tipo=formacao' },
       { label: 'Cursos avulsos', to: '/cursos?tipo=curso' },
     ],
   },

@@ -10,7 +10,7 @@ export const listarCatalogo = async ({ tipo, q } = {}) => {
 
 export const obterCurso = async (slug) => (await api.get(`/cursos/${slug}/`)).data
 
-export const obterGraduacao = async (slug) => (await api.get(`/graduacoes/${slug}/`)).data
+export const obterFormacao = async (slug) => (await api.get(`/formacoes/${slug}/`)).data
 
 export const obterTurma = async (id) => (await api.get(`/turmas/${id}/`)).data
 

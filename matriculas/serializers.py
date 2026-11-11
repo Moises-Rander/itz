@@ -141,7 +141,7 @@ class MatriculaStatusSerializer(serializers.ModelSerializer):
         t = obj.turma
         return {
             'id': t.pk, 'codigo': t.codigo, 'produto': t.produto.nome,
-            'tipo': 'graduacao' if t.is_graduacao else 'curso',
+            'tipo': 'formacao' if t.is_formacao else 'curso',
             'inicio': t.inicio, 'fim': t.fim,
         }
 

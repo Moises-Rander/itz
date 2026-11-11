@@ -1,8 +1,7 @@
 """Serializers públicos do catálogo (somente leitura)."""
-from django.utils import timezone
 from rest_framework import serializers
 
-from .models import Curso, Graduacao, Professor, Turma
+from .models import Curso, Formacao, Professor, Turma
 
 
 class ProfessorSerializer(serializers.ModelSerializer):
@@ -31,75 +30,51 @@ def _preco(turma):
 
 
 class TurmaSerializer(serializers.ModelSerializer):
-    """Turma disponível, com cronograma, professores e preço."""
+    """Turma disponível, com horários, professores e preço."""
 
     inicio = serializers.DateField(read_only=True)
     fim = serializers.DateField(read_only=True)
     vagas_disponiveis = serializers.SerializerMethodField()
-    em_andamento = serializers.SerializerMethodField()
     preco = serializers.SerializerMethodField()
-    cronograma = serializers.SerializerMethodField()
+    horarios = serializers.SerializerMethodField()
     professores = serializers.SerializerMethodField()
 
     class Meta:
         model = Turma
         fields = (
-            'id', 'codigo', 'inicio', 'fim', 'vagas_disponiveis', 'em_andamento',
-            'preco', 'cronograma', 'professores',
+            'id', 'codigo', 'inicio', 'fim', 'vagas_disponiveis', 'preco', 'horarios',
+            'professores',
         )
-
-    def _componentes(self, obj):
-        if obj.is_graduacao:
-            return sorted(
-                obj.turmas_curso.select_related('curso').prefetch_related('horarios', 'professores'),
-                key=lambda t: t.data_inicio,
-            )
-        return [obj]
 
     def get_vagas_disponiveis(self, obj):
         return obj.vagas_disponiveis()
 
-    def get_em_andamento(self, obj):
-        return bool(obj.inicio and obj.inicio < timezone.localdate())
-
     def get_preco(self, obj):
         return _preco(obj)
 
-    def get_cronograma(self, obj):
+    def get_horarios(self, obj):
         return [
             {
-                'curso': t.curso.nome,
-                'curso_slug': t.curso.slug,
-                'inicio': t.data_inicio,
-                'fim': t.data_fim,
-                'horarios': [
-                    {
-                        'dia': h.get_dia_semana_display(),
-                        'inicio': h.hora_inicio.strftime('%H:%M'),
-                        'fim': h.hora_fim.strftime('%H:%M'),
-                    }
-                    for h in t.horarios.all()
-                ],
-                'professores': [p.nome for p in t.professores.all()],
+                'dia': h.get_dia_semana_display(),
+                'inicio': h.hora_inicio.strftime('%H:%M'),
+                'fim': h.hora_fim.strftime('%H:%M'),
             }
-            for t in self._componentes(obj)
+            for h in obj.horarios.all()
         ]
 
     def get_professores(self, obj):
-        vistos = {}
-        for t in self._componentes(obj):
-            for p in t.professores.all():
-                vistos.setdefault(p.pk, p)
-        return ProfessorSerializer(vistos.values(), many=True, context=self.context).data
+        return ProfessorSerializer(obj.professores.all(), many=True, context=self.context).data
 
 
 def turmas_disponiveis(produto):
-    turmas = produto.turmas.filter(status=Turma.Status.PUBLICADA)
+    turmas = produto.turmas.filter(status=Turma.Status.PUBLICADA).prefetch_related(
+        'horarios', 'professores'
+    )
     return sorted((t for t in turmas if t.disponivel()), key=lambda t: t.inicio)
 
 
 class CatalogoItemSerializer(serializers.Serializer):
-    """Card da vitrine — curso avulso ou graduação com turma disponível."""
+    """Card da vitrine — curso avulso ou formação com turma disponível."""
 
     def to_representation(self, item):
         produto, turmas = item
@@ -110,13 +85,13 @@ class CatalogoItemSerializer(serializers.Serializer):
         if imagem and request:
             imagem = request.build_absolute_uri(imagem)
         return {
-            'tipo': 'graduacao' if isinstance(produto, Graduacao) else 'curso',
+            'tipo': 'formacao' if isinstance(produto, Formacao) else 'curso',
             'slug': produto.slug,
             'nome': produto.nome,
             'resumo': produto.resumo,
             'imagem': imagem,
             'carga_horaria': produto.carga_horaria,
-            'qtd_cursos': produto.cursos().count() if isinstance(produto, Graduacao) else None,
+            'qtd_modulos': produto.modulos.count() if isinstance(produto, Formacao) else None,
             'proxima_turma': {'id': proxima.pk, 'codigo': proxima.codigo, 'inicio': proxima.inicio},
             'qtd_turmas': len(turmas),
             'preco': _preco(mais_barata),
@@ -124,32 +99,28 @@ class CatalogoItemSerializer(serializers.Serializer):
 
 
 class CursoDetalheSerializer(serializers.ModelSerializer):
+    aulas = serializers.SerializerMethodField()
     turmas = serializers.SerializerMethodField()
-    graduacoes = serializers.SerializerMethodField()
 
     class Meta:
         model = Curso
         fields = (
-            'slug', 'nome', 'resumo', 'descricao', 'ementa', 'carga_horaria', 'imagem',
-            'turmas', 'graduacoes',
+            'slug', 'nome', 'resumo', 'descricao', 'carga_horaria', 'imagem', 'aulas', 'turmas',
         )
+
+    def get_aulas(self, obj):
+        return [{'ordem': a.ordem, 'nome': a.nome} for a in obj.aulas.all()]
 
     def get_turmas(self, obj):
         return TurmaSerializer(turmas_disponiveis(obj), many=True, context=self.context).data
 
-    def get_graduacoes(self, obj):
-        """Graduações publicadas que incluem este curso (vitrine cruzada)."""
-        qs = Graduacao.objects.filter(publicado=True, modulos__itens__curso=obj).distinct()
-        return [{'slug': g.slug, 'nome': g.nome, 'resumo': g.resumo} for g in qs]
 
-
-class GraduacaoDetalheSerializer(serializers.ModelSerializer):
-    carga_horaria = serializers.IntegerField(read_only=True)
+class FormacaoDetalheSerializer(serializers.ModelSerializer):
     modulos = serializers.SerializerMethodField()
     turmas = serializers.SerializerMethodField()
 
     class Meta:
-        model = Graduacao
+        model = Formacao
         fields = (
             'slug', 'nome', 'resumo', 'descricao', 'carga_horaria', 'imagem',
             'modulos', 'turmas',
@@ -160,16 +131,9 @@ class GraduacaoDetalheSerializer(serializers.ModelSerializer):
             {
                 'ordem': m.ordem,
                 'nome': m.nome,
-                'descricao': m.descricao,
-                'cursos': [
-                    {
-                        'slug': i.curso.slug, 'nome': i.curso.nome,
-                        'resumo': i.curso.resumo, 'carga_horaria': i.curso.carga_horaria,
-                    }
-                    for i in m.itens.select_related('curso')
-                ],
+                'aulas': [{'ordem': a.ordem, 'nome': a.nome} for a in m.aulas.all()],
             }
-            for m in obj.modulos.prefetch_related('itens__curso')
+            for m in obj.modulos.prefetch_related('aulas')
         ]
 
     def get_turmas(self, obj):
@@ -187,6 +151,6 @@ class TurmaCheckoutSerializer(TurmaSerializer):
     def get_produto(self, obj):
         p = obj.produto
         return {
-            'tipo': 'graduacao' if obj.is_graduacao else 'curso',
+            'tipo': 'formacao' if obj.is_formacao else 'curso',
             'slug': p.slug, 'nome': p.nome, 'carga_horaria': p.carga_horaria,
         }

@@ -9,7 +9,7 @@ import { useCatalogo } from '@/hooks/useCatalogo'
 
 const ABAS = [
   { value: '', label: 'Todos' },
-  { value: 'graduacao', label: 'Graduações' },
+  { value: 'formacao', label: 'Formações' },
   { value: 'curso', label: 'Cursos avulsos' },
 ]
 
@@ -29,8 +29,8 @@ export default function Catalogo() {
   return (
     <>
       <PageHeader
-        title="Cursos e Graduações"
-        subtitle="Faça uma graduação completa ou escolha cursos avulsos. Só aparecem aqui as turmas com matrícula aberta."
+        title="Cursos e Formações"
+        subtitle="Faça uma formação completa ou escolha cursos avulsos. Só aparecem aqui as turmas com matrícula aberta."
       />
       <div className="mx-auto max-w-7xl px-4 py-10 sm:px-6 lg:px-8">
         <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">

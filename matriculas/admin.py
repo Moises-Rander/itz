@@ -45,7 +45,7 @@ class VagaInline(SomenteLeituraInline):
     model = Vaga
     fields = ('turma',)
     readonly_fields = fields
-    verbose_name_plural = 'vagas ocupadas (turmas de curso)'
+    verbose_name_plural = 'vagas ocupadas'
 
 
 @admin.register(Matricula)
@@ -54,7 +54,7 @@ class MatriculaAdmin(admin.ModelAdmin):
         'id', 'aluno', 'turma', 'status_col', 'metodo', 'parcelas', 'valor_total', 'criada_em',
     )
     list_display_links = ('id', 'aluno')
-    list_filter = ('status', 'metodo', 'turma__curso', 'turma__graduacao')
+    list_filter = ('status', 'metodo', 'turma__curso', 'turma__formacao')
     search_fields = (
         'aluno__nome', 'aluno__sobrenome', 'aluno__cpf', 'aluno__email', 'asaas_payment_id',
     )
@@ -126,20 +126,20 @@ class CupomAdmin(admin.ModelAdmin):
     list_filter = ('tipo_desconto', 'is_ativo')
     search_fields = ('codigo',)
     readonly_fields = ('usos_atuais',)
-    autocomplete_fields = ('curso', 'graduacao')
+    autocomplete_fields = ('curso', 'formacao')
     fieldsets = (
         (None, {'fields': (
             'codigo', 'tipo_desconto', 'valor_desconto', ('data_inicio', 'data_fim'),
             'max_usos', 'usos_atuais', 'is_ativo',
         )}),
         ('Restringir a (opcional — preencha no máximo um)', {
-            'fields': ('turma', 'curso', 'graduacao'),
+            'fields': ('turma', 'curso', 'formacao'),
         }),
     )
 
     @admin.display(description='vale para')
     def restrito_a(self, obj):
-        return obj.turma or obj.curso or obj.graduacao or 'Tudo'
+        return obj.turma or obj.curso or obj.formacao or 'Tudo'
 
 
 @admin.register(Promocao)
@@ -148,19 +148,19 @@ class PromocaoAdmin(admin.ModelAdmin):
         '__str__', 'tipo_desconto', 'valor', 'restrito_a', 'data_inicio', 'data_fim', 'is_ativa',
     )
     list_filter = ('tipo_desconto', 'is_ativa')
-    autocomplete_fields = ('curso', 'graduacao')
+    autocomplete_fields = ('curso', 'formacao')
     fieldsets = (
         (None, {'fields': (
             'nome', 'tipo_desconto', 'valor', ('data_inicio', 'data_fim'), 'is_ativa',
         )}),
         ('Restringir a (opcional — preencha no máximo um)', {
-            'fields': ('turma', 'curso', 'graduacao'),
+            'fields': ('turma', 'curso', 'formacao'),
         }),
     )
 
     @admin.display(description='vale para')
     def restrito_a(self, obj):
-        return obj.turma or obj.curso or obj.graduacao or 'Tudo'
+        return obj.turma or obj.curso or obj.formacao or 'Tudo'
 
 
 @admin.register(TaxaParcelamento)

@@ -7,9 +7,9 @@ import Preco from './Preco'
 import { tipoLabel, cargaHorariaLabel, formatarData } from '@/lib/format'
 
 const linkProduto = (item) =>
-  item.tipo === 'graduacao' ? `/graduacoes/${item.slug}` : `/cursos/${item.slug}`
+  item.tipo === 'formacao' ? `/formacoes/${item.slug}` : `/cursos/${item.slug}`
 
-// Card da vitrine: curso avulso ou graduação com turma disponível.
+// Card da vitrine: curso avulso ou formação com turma disponível.
 export default function ProdutoCard({ item }) {
   const destino = linkProduto(item)
   return (
@@ -22,7 +22,7 @@ export default function ProdutoCard({ item }) {
             <GraduationCap className="h-10 w-10" />
           </div>
         )}
-        <Badge className="absolute left-3 top-3" variant={item.tipo === 'graduacao' ? 'default' : 'secondary'}>
+        <Badge className="absolute left-3 top-3" variant={item.tipo === 'formacao' ? 'default' : 'secondary'}>
           {tipoLabel(item.tipo)}
         </Badge>
       </Link>
@@ -36,9 +36,9 @@ export default function ProdutoCard({ item }) {
           <span className="flex items-center gap-1">
             <Clock className="h-4 w-4" /> {cargaHorariaLabel(item.carga_horaria)}
           </span>
-          {item.qtd_cursos && (
+          {item.qtd_modulos > 0 && (
             <span className="flex items-center gap-1">
-              <Layers className="h-4 w-4" /> {item.qtd_cursos} cursos
+              <Layers className="h-4 w-4" /> {item.qtd_modulos} módulo{item.qtd_modulos === 1 ? '' : 's'}
             </span>
           )}
           <span className="flex items-center gap-1">

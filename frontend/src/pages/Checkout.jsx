@@ -142,7 +142,7 @@ export default function Checkout() {
       </div>
     )
 
-  const voltarPara = `/${turma.produto.tipo === 'graduacao' ? 'graduacoes' : 'cursos'}/${turma.produto.slug}`
+  const voltarPara = `/${turma.produto.tipo === 'formacao' ? 'formacoes' : 'cursos'}/${turma.produto.slug}`
   const set = (setter, campo, mascara) => (e) => {
     const valor = mascara ? mascara(e.target.value) : e.target.value
     setter((s) => ({ ...s, [campo]: valor }))

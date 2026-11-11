@@ -4,7 +4,7 @@ import { EmptyState } from '@/components/common/StateComponents'
 import TurmaOferta from '@/components/catalogo/TurmaOferta'
 import ProfessoresGrid from '@/components/catalogo/ProfessoresGrid'
 
-// Seções compartilhadas pelas páginas de detalhe de Curso e de Graduação.
+// Seções compartilhadas pelas páginas de detalhe de Curso e de Formação.
 const container = 'mx-auto max-w-6xl px-4 sm:px-6 lg:px-8'
 
 export function Cabecalho({ badge, nome, info, descricao, imagem }) {
@@ -23,7 +23,7 @@ export function Cabecalho({ badge, nome, info, descricao, imagem }) {
   )
 }
 
-export function Turmas({ turmas, graduacao }) {
+export function Turmas({ turmas }) {
   return (
     <section className="mt-12">
       <h2 className="mb-5 flex items-center gap-2 text-2xl font-bold">
@@ -33,7 +33,7 @@ export function Turmas({ turmas, graduacao }) {
         <EmptyState message="Nenhuma turma aberta no momento. Volte em breve!" />
       ) : (
         <div className="space-y-4">
-          {turmas.map((t) => <TurmaOferta key={t.id} turma={t} graduacao={graduacao} />)}
+          {turmas.map((t) => <TurmaOferta key={t.id} turma={t} />)}
         </div>
       )}
     </section>

@@ -5,11 +5,11 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .models import Curso, Graduacao, Professor, Turma
+from .models import Curso, Formacao, Professor, Turma
 from .serializers import (
     CatalogoItemSerializer,
     CursoDetalheSerializer,
-    GraduacaoDetalheSerializer,
+    FormacaoDetalheSerializer,
     ProfessorSerializer,
     TurmaCheckoutSerializer,
     turmas_disponiveis,
@@ -17,9 +17,9 @@ from .serializers import (
 
 
 class CatalogoView(APIView):
-    """Vitrine: cursos avulsos e graduações com ao menos uma turma disponível.
+    """Vitrine: cursos avulsos e formações com ao menos uma turma disponível.
 
-    ``?tipo=curso`` ou ``?tipo=graduacao`` filtra; ``?q=`` busca pelo nome.
+    ``?tipo=curso`` ou ``?tipo=formacao`` filtra; ``?q=`` busca pelo nome.
     """
 
     permission_classes = (AllowAny,)
@@ -27,7 +27,7 @@ class CatalogoView(APIView):
     def get(self, request):
         tipo = request.query_params.get('tipo')
         busca = (request.query_params.get('q') or '').strip()
-        modelos = {'curso': [Curso], 'graduacao': [Graduacao]}.get(tipo, [Graduacao, Curso])
+        modelos = {'curso': [Curso], 'formacao': [Formacao]}.get(tipo, [Formacao, Curso])
         itens = []
         for modelo in modelos:
             qs = modelo.objects.filter(publicado=True)
@@ -47,11 +47,11 @@ class CursoDetalheView(RetrieveAPIView):
     queryset = Curso.objects.filter(publicado=True)
 
 
-class GraduacaoDetalheView(RetrieveAPIView):
+class FormacaoDetalheView(RetrieveAPIView):
     permission_classes = (AllowAny,)
-    serializer_class = GraduacaoDetalheSerializer
+    serializer_class = FormacaoDetalheSerializer
     lookup_field = 'slug'
-    queryset = Graduacao.objects.filter(publicado=True)
+    queryset = Formacao.objects.filter(publicado=True)
 
 
 class TurmaCheckoutView(APIView):
@@ -60,7 +60,7 @@ class TurmaCheckoutView(APIView):
     permission_classes = (AllowAny,)
 
     def get(self, request, pk):
-        turma = get_object_or_404(Turma.objects.select_related('curso', 'graduacao'), pk=pk)
+        turma = get_object_or_404(Turma.objects.select_related('curso', 'formacao'), pk=pk)
         if not turma.disponivel():
             raise Http404('Turma indisponível.')
         return Response(TurmaCheckoutSerializer(turma, context={'request': request}).data)

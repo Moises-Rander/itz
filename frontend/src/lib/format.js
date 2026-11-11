@@ -1,5 +1,5 @@
 export const tipoLabel = (tipo) =>
-  ({ graduacao: 'Graduação', curso: 'Curso' }[tipo] || tipo)
+  ({ formacao: 'Formação', curso: 'Curso' }[tipo] || tipo)
 
 export const cargaHorariaLabel = (horas) =>
   horas ? `${horas}h` : 'Carga horária a definir'

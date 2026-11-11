@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import {
   listarCatalogo,
   obterCurso,
-  obterGraduacao,
+  obterFormacao,
   obterTurma,
   listarProfessores,
 } from '@/services/catalogo'
@@ -13,8 +13,8 @@ export const useCatalogo = (filtros = {}) =>
 export const useCurso = (slug) =>
   useQuery({ queryKey: ['curso', slug], queryFn: () => obterCurso(slug), enabled: !!slug })
 
-export const useGraduacao = (slug) =>
-  useQuery({ queryKey: ['graduacao', slug], queryFn: () => obterGraduacao(slug), enabled: !!slug })
+export const useFormacao = (slug) =>
+  useQuery({ queryKey: ['formacao', slug], queryFn: () => obterFormacao(slug), enabled: !!slug })
 
 // Vagas e preço mudam: no checkout sempre busca a versão atual.
 export const useTurma = (id) =>

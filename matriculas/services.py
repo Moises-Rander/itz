@@ -110,10 +110,8 @@ def _descricao(turma):
 @transaction.atomic
 def _reservar(*, turma_id, aluno_dados, metodo, parcelas, codigo_cupom, ip):
     """Valida e cria a matrícula PENDENTE com as vagas reservadas."""
-    turma = Turma.objects.select_related('curso', 'graduacao').get(pk=turma_id)
-    # Lock nas turmas de curso envolvidas (ordem fixa por id evita deadlock).
-    ids = sorted(t.pk for t in turma.turmas_curso_restantes())
-    list(Turma.objects.select_for_update().filter(pk__in=ids).order_by('pk'))
+    # Lock na turma: duas matrículas simultâneas não disputam a última vaga.
+    turma = Turma.objects.select_for_update().get(pk=turma_id)
 
     if not turma.disponivel():
         raise ValidationError({'turma': 'Esta turma não está mais disponível para matrícula.'})
@@ -148,9 +146,7 @@ def _reservar(*, turma_id, aluno_dados, metodo, parcelas, codigo_cupom, ip):
         reserva_expira_em=timezone.now() + timedelta(minutes=settings.RESERVA_MINUTOS),
         termos_aceitos_em=timezone.now(), ip=ip,
     )
-    Vaga.objects.bulk_create(
-        [Vaga(matricula=matricula, turma_id=pk) for pk in ids]
-    )
+    Vaga.objects.create(matricula=matricula, turma=turma)
     return matricula
 
 
@@ -351,20 +347,14 @@ def cancelar_e_estornar(matricula, motivo=''):
 
 
 def resumo_turma(turma):
-    """Cursos da turma com datas, horários e professores (para emails/páginas)."""
-    componentes = turma.turmas_curso.select_related('curso').prefetch_related(
-        'horarios', 'professores'
-    ) if turma.is_graduacao else [turma]
-    itens = []
-    for t in sorted(componentes, key=lambda t: (t.data_inicio, t.curso.nome)):
-        itens.append({
-            'curso': t.curso.nome,
-            'inicio': t.data_inicio,
-            'fim': t.data_fim,
-            'horarios': [str(h) for h in t.horarios.all()],
-            'professores': [p.nome for p in t.professores.all()],
-        })
-    return itens
+    """Datas, horários e professores da turma (para emails/páginas)."""
+    return [{
+        'curso': turma.produto.nome,
+        'inicio': turma.data_inicio,
+        'fim': turma.data_fim,
+        'horarios': [str(h) for h in turma.horarios.all()],
+        'professores': [p.nome for p in turma.professores.all()],
+    }]
 
 
 def _contexto(m):
@@ -374,7 +364,7 @@ def _contexto(m):
         'email': m.aluno.email,
         'cpf': m.aluno.cpf_formatado,
         'telefone': m.aluno.telefone,
-        'tipo': 'Graduação' if turma.is_graduacao else 'Curso',
+        'tipo': 'Formação' if turma.is_formacao else 'Curso',
         'produto': turma.produto.nome,
         'turma': turma.codigo,
         'inicio': turma.inicio,

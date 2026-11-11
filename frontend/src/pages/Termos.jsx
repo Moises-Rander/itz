@@ -10,7 +10,7 @@ export default function Termos() {
         <section>
           <h2>1. Matrícula</h2>
           <p>
-            A matrícula em um curso ou graduação da {INSTITUICAO.nome} é confirmada quando o
+            A matrícula em um curso ou formação da {INSTITUICAO.nome} é confirmada quando o
             pagamento é aprovado. Ao gerar um PIX, a vaga fica reservada por tempo limitado; sem o
             pagamento nesse prazo, a reserva é liberada sem nenhuma cobrança.
           </p>
@@ -19,8 +19,7 @@ export default function Termos() {
           <h2>2. Aulas</h2>
           <p>
             As aulas são presenciais, na sede ({CONTATO.endereco}), nas datas e horários informados
-            na página da turma. Na graduação, quem entra com a turma em andamento participa dos
-            cursos que ainda não terminaram.
+            na página da turma. As matrículas ficam abertas até o dia de início da turma.
           </p>
         </section>
         <section>

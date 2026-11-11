@@ -53,7 +53,7 @@ function Hero() {
 }
 
 function CursosDestaque() {
-  // O catálogo já vem com as graduações primeiro.
+  // O catálogo já vem com as formações primeiro.
   const { data, isLoading, isError, refetch } = useCatalogo()
 
   return (
@@ -61,7 +61,7 @@ function CursosDestaque() {
       <SectionTitle
         eyebrow="Nossos cursos"
         title="Cursos em destaque"
-        subtitle="Faça uma graduação completa ou comece por um curso avulso."
+        subtitle="Faça uma formação completa ou comece por um curso avulso."
       />
       <div className="mt-10">
         {isLoading && <CardsSkeleton count={6} />}

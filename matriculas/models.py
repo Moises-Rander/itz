@@ -30,7 +30,7 @@ def _aplicar_desconto(valor_base, tipo, valor_desconto):
 
 
 class AlvoDesconto(models.Model):
-    """Restrição opcional de um desconto a uma turma, curso ou graduação."""
+    """Restrição opcional de um desconto a uma turma, curso ou formação."""
 
     turma = models.ForeignKey(
         'cursos.Turma', on_delete=models.CASCADE, null=True, blank=True,
@@ -40,29 +40,29 @@ class AlvoDesconto(models.Model):
         'cursos.Curso', on_delete=models.CASCADE, null=True, blank=True,
         related_name='+', verbose_name='curso',
     )
-    graduacao = models.ForeignKey(
-        'cursos.Graduacao', on_delete=models.CASCADE, null=True, blank=True,
-        related_name='+', verbose_name='graduação',
+    formacao = models.ForeignKey(
+        'cursos.Formacao', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='+', verbose_name='formação',
     )
 
     class Meta:
         abstract = True
 
     def _alvos(self):
-        return [a for a in (self.turma_id, self.curso_id, self.graduacao_id) if a]
+        return [a for a in (self.turma_id, self.curso_id, self.formacao_id) if a]
 
     def aplica_a(self, turma):
         if self.turma_id:
             return self.turma_id == turma.pk
         if self.curso_id:
             return self.curso_id == turma.curso_id
-        if self.graduacao_id:
-            return self.graduacao_id == turma.graduacao_id
+        if self.formacao_id:
+            return self.formacao_id == turma.formacao_id
         return True  # sem restrição: vale para tudo
 
     def clean(self):
         if len(self._alvos()) > 1:
-            raise ValidationError('Restrinja a no máximo um: turma, curso ou graduação.')
+            raise ValidationError('Restrinja a no máximo um: turma, curso ou formação.')
         if getattr(self, 'data_inicio', None) and getattr(self, 'data_fim', None):
             if self.data_fim < self.data_inicio:
                 raise ValidationError({'data_fim': 'A data de fim não pode ser anterior ao início.'})
@@ -103,7 +103,7 @@ class Cupom(AlvoDesconto):
 
 class Promocao(AlvoDesconto):
     """Desconto automático enquanto vigente. A mais específica vence
-    (turma > curso/graduação > geral)."""
+    (turma > curso/formação > geral)."""
 
     nome = models.CharField('nome', max_length=120, blank=True, help_text='Ex.: Black Friday')
     tipo_desconto = models.CharField('tipo de desconto', max_length=12, choices=TipoDesconto.choices)
@@ -127,7 +127,7 @@ class Promocao(AlvoDesconto):
     def especificidade(self):
         if self.turma_id:
             return 2
-        return 1 if (self.curso_id or self.graduacao_id) else 0
+        return 1 if (self.curso_id or self.formacao_id) else 0
 
 
 class TaxaParcelamento(models.Model):
@@ -297,18 +297,14 @@ class VagaQuerySet(models.QuerySet):
 
 
 class Vaga(models.Model):
-    """Lugar ocupado por uma matrícula em uma turma de curso.
-
-    Matrícula em curso avulso → 1 vaga. Matrícula em graduação → 1 vaga em
-    cada turma de curso do pacote que ainda não terminou.
-    """
+    """Lugar ocupado por uma matrícula na sua turma."""
 
     matricula = models.ForeignKey(
         Matricula, on_delete=models.CASCADE, related_name='vagas', verbose_name='matrícula'
     )
     turma = models.ForeignKey(
         'cursos.Turma', on_delete=models.PROTECT, related_name='ocupacoes',
-        limit_choices_to={'curso__isnull': False}, verbose_name='turma de curso',
+        verbose_name='turma',
     )
 
     objects = VagaQuerySet.as_manager()
