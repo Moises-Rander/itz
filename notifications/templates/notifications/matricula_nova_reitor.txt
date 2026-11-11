@@ -1,0 +1,13 @@
+{% extends 'notifications/base.txt' %}
+{% block conteudo %}Nova matrícula confirmada — o aluno já faz parte da turma.
+
+Aluno: {{ nome }}
+CPF: {{ cpf }}
+Email: {{ email }}
+Telefone: {{ telefone }}
+Pagamento: {{ metodo }}{% if parcelas > 1 %} — {{ parcelas }}x de R$ {{ valor_parcela }}{% endif %} — total R$ {{ valor_total }}
+
+{% include 'notifications/_turma.txt' %}
+
+Abrir no Admin: {{ admin_url }}
+{% endblock %}

@@ -1,8 +1,0 @@
-{% extends 'notifications/base.txt' %}
-{% block conteudo %}Olá, {{ nome }}!
-
-Você está na LISTA DE ESPERA do vestibular de {{ turma }}.
-{% if posicao %}Sua posição atual na lista é: {{ posicao }}º.
-{% endif %}
-Caso surja uma vaga, entraremos em contato por email. Fique atento(a) à sua caixa de entrada.
-{% endblock %}

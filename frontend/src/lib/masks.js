@@ -43,3 +43,11 @@ export function isCpfValido(valor = '') {
   const d2 = calcDigito(cpf.slice(0, 10))
   return d1 === Number(cpf[9]) && d2 === Number(cpf[10])
 }
+
+export function maskCartao(valor = '') {
+  return apenasDigitos(valor).slice(0, 19).replace(/(\d{4})(?=\d)/g, '$1 ')
+}
+
+export function maskCEP(valor = '') {
+  return apenasDigitos(valor).slice(0, 8).replace(/(\d{5})(\d)/, '$1-$2')
+}

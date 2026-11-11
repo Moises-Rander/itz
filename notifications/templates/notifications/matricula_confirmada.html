@@ -1,0 +1,9 @@
+{% extends 'notifications/base.html' %}
+{% block conteudo %}
+<h2 style="margin-top:0; color:#1f3a5f;">Matrícula confirmada!</h2>
+<p>Olá, <strong>{{ nome }}</strong>! Recebemos o seu pagamento e a sua matrícula está confirmada.</p>
+{% include 'notifications/_turma.html' %}
+<p style="font-size:14px;">Pagamento: {{ metodo }}{% if parcelas > 1 %} em {{ parcelas }}x de R$ {{ valor_parcela }}{% endif %} — total R$ {{ valor_total }}.</p>
+<p>Guarde este email como comprovante. Qualquer dúvida, fale com a secretaria pelos contatos abaixo.</p>
+<p>Seja muito bem-vindo(a)!</p>
+{% endblock %}

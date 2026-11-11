@@ -3,13 +3,14 @@ import { ArrowRight, Quote } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import SectionTitle from '@/components/common/SectionTitle'
-import CursoCard from '@/components/cursos/CursoCard'
+import ProdutoCard from '@/components/catalogo/ProdutoCard'
+import ProfessoresGrid from '@/components/catalogo/ProfessoresGrid'
 import LeadForm from '@/components/forms/LeadForm'
 import ContactInfo from '@/components/common/ContactInfo'
 import { CardsSkeleton, ErrorState, EmptyState } from '@/components/common/StateComponents'
-import { useCursos, } from '@/hooks/useCursos'
+import { useCatalogo, useProfessores } from '@/hooks/useCatalogo'
 import { useConteudo, useDepoimentos } from '@/hooks/useCms'
-import { HERO } from '@/lib/config'
+import { HERO, INSTITUICAO } from '@/lib/config'
 
 const container = 'mx-auto max-w-7xl px-4 sm:px-6 lg:px-8'
 
@@ -52,30 +53,25 @@ function Hero() {
 }
 
 function CursosDestaque() {
-  const { data, isLoading, isError, refetch } = useCursos()
-
-  const destaque = () => {
-    const grad = data.filter((c) => c.tipo === 'GRADUACAO').slice(0, 3)
-    const form = data.filter((c) => c.tipo === 'FORMACAO').slice(0, 3)
-    return [...grad, ...form]
-  }
+  // O catálogo já vem com as graduações primeiro.
+  const { data, isLoading, isError, refetch } = useCatalogo()
 
   return (
     <section className={`${container} py-20`}>
       <SectionTitle
         eyebrow="Nossos cursos"
         title="Cursos em destaque"
-        subtitle="Graduação e formação teológica para cada momento da sua caminhada."
+        subtitle="Faça uma graduação completa ou comece por um curso avulso."
       />
       <div className="mt-10">
         {isLoading && <CardsSkeleton count={6} />}
         {isError && <ErrorState onRetry={refetch} />}
         {data && (data.length === 0 ? (
-          <EmptyState message="Em breve, novos cursos por aqui." />
+          <EmptyState message="Em breve, novas turmas por aqui." />
         ) : (
           <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
-            {destaque().map((curso) => (
-              <CursoCard key={curso.id} curso={curso} />
+            {data.slice(0, 6).map((item) => (
+              <ProdutoCard key={`${item.tipo}-${item.slug}`} item={item} />
             ))}
           </div>
         ))}
@@ -100,7 +96,7 @@ function SobreResumo() {
     <section className="bg-muted/40 py-20">
       <div className={`${container} grid items-center gap-10 lg:grid-cols-2`}>
         <div>
-          <SectionTitle eyebrow="Sobre a FTZ" title={bloco.titulo} />
+          <SectionTitle eyebrow={`Sobre o ${INSTITUICAO.sigla}`} title={bloco.titulo} />
           <p className="mt-4 whitespace-pre-line text-muted-foreground">{bloco.texto}</p>
           <Button asChild className="mt-6" variant="outline">
             <Link to="/sobre">Saiba mais sobre nós</Link>
@@ -113,6 +109,19 @@ function SobreResumo() {
             className="h-80 w-full rounded-2xl object-cover shadow-sm"
           />
         )}
+      </div>
+    </section>
+  )
+}
+
+function Professores() {
+  const { data } = useProfessores({ home: true })
+  if (!data?.length) return null
+  return (
+    <section className={`${container} py-20`}>
+      <SectionTitle center eyebrow="Corpo docente" title="Nossos professores" />
+      <div className="mt-10">
+        <ProfessoresGrid professores={data} comBio />
       </div>
     </section>
   )
@@ -179,6 +188,7 @@ export default function Home() {
       <Hero />
       <CursosDestaque />
       <SobreResumo />
+      <Professores />
       <Depoimentos />
       <ContatoRapido />
     </>

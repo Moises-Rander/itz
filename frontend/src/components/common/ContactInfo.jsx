@@ -31,11 +31,11 @@ export default function ContactInfo() {
       <Item icon={AtSign}>
         <p className="font-medium">Instagram</p>
         <a href={CONTATO.instagram} target="_blank" rel="noreferrer" className="text-muted-foreground hover:text-primary">
-          Siga a FTZ
+          Siga o ITZ
         </a>
       </Item>
       <Button asChild className="w-full sm:w-auto">
-        <a href={whatsappLink('Olá! Gostaria de mais informações sobre a FTZ.')} target="_blank" rel="noreferrer">
+        <a href={whatsappLink('Olá! Gostaria de mais informações sobre o ITZ.')} target="_blank" rel="noreferrer">
           <MessageCircle className="mr-2 h-4 w-4" />
           Falar no WhatsApp
         </a>

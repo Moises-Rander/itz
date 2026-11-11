@@ -1,37 +1,12 @@
-from rest_framework.generics import ListAPIView, RetrieveAPIView
+from rest_framework.generics import ListAPIView
 from rest_framework.permissions import AllowAny
 
-from .models import ConteudoInstitucional, Depoimento, MembroEquipe, Post
+from .models import ConteudoInstitucional, Depoimento, MembroEquipe
 from .serializers import (
     ConteudoInstitucionalSerializer,
     DepoimentoSerializer,
     MembroEquipeSerializer,
-    PostDetailSerializer,
-    PostListSerializer,
 )
-
-
-class PostListView(ListAPIView):
-    """Posts publicados, com filtro opcional por categoria."""
-
-    permission_classes = (AllowAny,)
-    serializer_class = PostListSerializer
-
-    def get_queryset(self):
-        qs = Post.objects.filter(is_publicado=True)
-        categoria = self.request.query_params.get('categoria')
-        if categoria:
-            qs = qs.filter(categoria__iexact=categoria)
-        return qs.order_by('-data_publicacao')
-
-
-class PostDetailView(RetrieveAPIView):
-    """Detalhe de um post publicado, por slug."""
-
-    permission_classes = (AllowAny,)
-    serializer_class = PostDetailSerializer
-    lookup_field = 'slug'
-    queryset = Post.objects.filter(is_publicado=True)
 
 
 class ConteudoInstitucionalListView(ListAPIView):

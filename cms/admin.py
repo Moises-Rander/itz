@@ -1,16 +1,6 @@
 from django.contrib import admin
 
-from .models import ConteudoInstitucional, Depoimento, MembroEquipe, Post
-
-
-@admin.register(Post)
-class PostAdmin(admin.ModelAdmin):
-    list_display = ('titulo', 'slug', 'categoria', 'data_publicacao', 'is_publicado')
-    list_filter = ('is_publicado', 'categoria', 'data_publicacao')
-    search_fields = ('titulo', 'conteudo', 'categoria')
-    list_editable = ('is_publicado',)
-    date_hierarchy = 'data_publicacao'
-    prepopulated_fields = {'slug': ('titulo',)}
+from .models import ConteudoInstitucional, Depoimento, MembroEquipe
 
 
 @admin.register(ConteudoInstitucional)

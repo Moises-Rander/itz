@@ -1,38 +1,4 @@
 from django.db import models
-from django.utils.text import slugify
-
-
-class Post(models.Model):
-    """Post de Blog e Notícias. Apenas publicados aparecem no site."""
-
-    titulo = models.CharField('título', max_length=200)
-    slug = models.SlugField('slug', max_length=220, unique=True, blank=True)
-    conteudo = models.TextField('conteúdo')
-    imagem = models.ImageField('imagem', upload_to='posts/', null=True, blank=True)
-    categoria = models.CharField('categoria', max_length=80, blank=True)
-    data_publicacao = models.DateTimeField('data de publicação')
-    is_publicado = models.BooleanField('publicado', default=False)
-
-    class Meta:
-        verbose_name = 'post'
-        verbose_name_plural = 'posts'
-        ordering = ['-data_publicacao']
-
-    def __str__(self):
-        return self.titulo
-
-    def save(self, *args, **kwargs):
-        if not self.slug:
-            self.slug = self._gerar_slug_unico()
-        super().save(*args, **kwargs)
-
-    def _gerar_slug_unico(self):
-        base = slugify(self.titulo)[:200] or 'post'
-        slug, n = base, 2
-        while Post.objects.filter(slug=slug).exclude(pk=self.pk).exists():
-            slug = f'{base}-{n}'
-            n += 1
-        return slug
 
 
 class ConteudoInstitucional(models.Model):
@@ -62,7 +28,7 @@ class ConteudoInstitucional(models.Model):
 
 
 class MembroEquipe(models.Model):
-    """Professor ou membro institucional exibido no site."""
+    """Membro da equipe institucional (reitoria, secretaria, diretoria) exibido no site."""
 
     nome = models.CharField('nome', max_length=150)
     cargo = models.CharField('cargo', max_length=120)

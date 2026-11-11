@@ -1,127 +1,164 @@
-"""Cliente da integração com o Asaas.
+"""Cliente da integração com o Asaas (API v3).
 
-Há duas implementações:
-- ``AsaasClient``: chama a API real via HTTP (requests).
-- ``FakeAsaasClient``: simula respostas, sem rede — usado quando
-  ``settings.ASAAS_FAKE`` é True (desenvolvimento e testes).
+- ``AsaasClient``: chama a API real via HTTP.
+- ``FakeAsaasClient``: simula respostas sem rede (desenvolvimento e testes),
+  ativo quando ``settings.ASAAS_FAKE`` é True ou não há API key.
 
-``get_asaas_client()`` devolve a implementação adequada conforme o settings.
+SEGURANÇA: dados de cartão passam por aqui apenas em memória, a caminho do
+Asaas. Nunca grave, registre em log ou inclua em mensagens de erro o conteúdo
+de ``cartao``.
 """
 import hashlib
 import uuid
+from datetime import date
 
 import requests
 from django.conf import settings
 
 
 class AsaasError(Exception):
-    """Erro ao comunicar com o Asaas."""
+    """Falha de comunicação ou erro de negócio devolvido pelo Asaas."""
+
+    def __init__(self, mensagem, *, recusado=False):
+        super().__init__(mensagem)
+        self.recusado = recusado  # True = cartão recusado (erro do pagador)
 
 
-# Mapeia o método de pagamento da FTZ para o billingType do Asaas.
-BILLING_TYPE = {
-    'PIX': 'PIX',
-    'BOLETO': 'BOLETO',
-    'CARTAO': 'CREDIT_CARD',
-}
+# Status do Asaas que significam "dinheiro garantido".
+STATUS_PAGO = {'CONFIRMED', 'RECEIVED', 'RECEIVED_IN_CASH'}
 
 
 class AsaasClient:
-    """Implementação real (HTTP) da API do Asaas."""
-
     def __init__(self, api_key=None, base_url=None):
         self.api_key = api_key or settings.ASAAS_API_KEY
         self.base_url = (base_url or settings.ASAAS_BASE_URL).rstrip('/')
 
-    def _headers(self):
-        return {'access_token': self.api_key, 'Content-Type': 'application/json'}
-
-    def _post(self, path, payload):
+    def _req(self, metodo, path, *, json=None, params=None):
         try:
-            resp = requests.post(
-                f'{self.base_url}{path}', json=payload,
-                headers=self._headers(), timeout=20,
+            resp = requests.request(
+                metodo, f'{self.base_url}{path}', json=json, params=params,
+                headers={'access_token': self.api_key, 'Content-Type': 'application/json'},
+                timeout=30,
             )
-            resp.raise_for_status()
-            return resp.json()
         except requests.RequestException as exc:
-            raise AsaasError(str(exc)) from exc
+            # Só o tipo do erro: a exceção pode carregar o corpo da requisição.
+            raise AsaasError(f'Falha de conexão com o Asaas ({type(exc).__name__}).') from None
+        if resp.status_code == 400:
+            erros = (resp.json() or {}).get('errors') or []
+            descricao = '; '.join(e.get('description', '') for e in erros) or 'Requisição recusada.'
+            raise AsaasError(descricao, recusado=True)
+        if not resp.ok:
+            raise AsaasError(f'Asaas respondeu HTTP {resp.status_code}.')
+        return resp.json() if resp.content else {}
 
-    def _get(self, path, params=None):
-        try:
-            resp = requests.get(
-                f'{self.base_url}{path}', params=params,
-                headers=self._headers(), timeout=20,
-            )
-            resp.raise_for_status()
-            return resp.json()
-        except requests.RequestException as exc:
-            raise AsaasError(str(exc)) from exc
-
-    def criar_ou_recuperar_cliente(self, *, nome, cpf, email, telefone=''):
-        """Procura o cliente pelo CPF; cria se não existir. Retorna o id."""
-        existentes = self._get('/customers', params={'cpfCnpj': cpf})
-        data = existentes.get('data') or []
-        if data:
-            return data[0]['id']
-        criado = self._post('/customers', {
+    # ----------------------------------------------------------- clientes
+    def criar_ou_recuperar_cliente(self, *, nome, cpf, email, telefone):
+        existentes = self._req('GET', '/customers', params={'cpfCnpj': cpf}).get('data') or []
+        if existentes:
+            return existentes[0]['id']
+        criado = self._req('POST', '/customers', json={
             'name': nome, 'cpfCnpj': cpf, 'email': email, 'mobilePhone': telefone,
+            # Os emails ao aluno saem do nosso sistema; evita mensagens duplicadas.
+            'notificationDisabled': True,
         })
         return criado['id']
 
-    def criar_cobranca(self, *, customer_id, valor, metodo, descricao, referencia):
-        cobranca = self._post('/payments', {
-            'customer': customer_id,
-            'billingType': BILLING_TYPE[metodo],
-            'value': float(valor),
-            'dueDate': _due_date(),
-            'description': descricao,
-            'externalReference': referencia,
+    # ---------------------------------------------------------- cobranças
+    def cobrar_pix(self, *, customer_id, valor, descricao, referencia):
+        cobranca = self._req('POST', '/payments', json={
+            'customer': customer_id, 'billingType': 'PIX', 'value': float(valor),
+            'dueDate': date.today().isoformat(),
+            'description': descricao, 'externalReference': referencia,
         })
-        return self._detalhar_pagamento(cobranca, metodo)
+        qr = self._req('GET', f"/payments/{cobranca['id']}/pixQrCode")
+        return {
+            'payment_id': cobranca['id'],
+            'pix_qrcode': qr.get('encodedImage', ''),
+            'pix_copia_cola': qr.get('payload', ''),
+        }
 
-    def _detalhar_pagamento(self, cobranca, metodo):
-        payment_id = cobranca['id']
-        info = {'asaas_payment_id': payment_id, 'metodo': metodo}
-        if metodo == 'PIX':
-            qr = self._get(f'/payments/{payment_id}/pixQrCode')
-            info['url_pagamento'] = cobranca.get('invoiceUrl', '')
-            info['pix_qrcode_base64'] = qr.get('encodedImage', '')
-            info['pix_copia_cola'] = qr.get('payload', '')
-        elif metodo == 'BOLETO':
-            info['url_pagamento'] = cobranca.get('bankSlipUrl', '')
-            info['boleto_linha_digitavel'] = cobranca.get('identificationField', '')
-        else:  # CARTAO
-            info['url_pagamento'] = cobranca.get('invoiceUrl', '')
-        return info
+    def cobrar_cartao(self, *, customer_id, valor_total, parcelas, descricao, referencia,
+                      cartao, titular, ip):
+        """Cobra no cartão. Retorna {'payment_id', 'pago'}; levanta AsaasError
+        com ``recusado=True`` se o cartão for negado."""
+        payload = {
+            'customer': customer_id, 'billingType': 'CREDIT_CARD',
+            'dueDate': date.today().isoformat(),
+            'description': descricao, 'externalReference': referencia,
+            'creditCard': {
+                'holderName': cartao['nome'], 'number': cartao['numero'],
+                'expiryMonth': cartao['mes'], 'expiryYear': cartao['ano'],
+                'ccv': cartao['cvv'],
+            },
+            'creditCardHolderInfo': {
+                'name': titular['nome'], 'email': titular['email'],
+                'cpfCnpj': titular['cpf'], 'postalCode': titular['cep'],
+                'addressNumber': titular['numero_endereco'], 'phone': titular['telefone'],
+            },
+            'remoteIp': ip,
+        }
+        if parcelas > 1:
+            payload['installmentCount'] = parcelas
+            payload['totalValue'] = float(valor_total)
+        else:
+            payload['value'] = float(valor_total)
+        cobranca = self._req('POST', '/payments', json=payload)
+        return {
+            'payment_id': cobranca['id'],
+            'installment_id': cobranca.get('installment') or '',
+            'pago': cobranca.get('status') in STATUS_PAGO,
+        }
+
+    def pagamento_confirmado(self, payment_id):
+        return self._req('GET', f'/payments/{payment_id}').get('status') in STATUS_PAGO
+
+    def cancelar_cobranca(self, payment_id):
+        """Remove uma cobrança ainda não paga (ex.: PIX expirado)."""
+        self._req('DELETE', f'/payments/{payment_id}')
+
+    def estornar(self, *, payment_id, installment_id=''):
+        if installment_id:
+            self._req('POST', f'/installments/{installment_id}/refund')
+        else:
+            self._req('POST', f'/payments/{payment_id}/refund')
 
 
 class FakeAsaasClient:
-    """Cliente simulado (sem rede) — respostas determinísticas por CPF/método."""
+    """Simulação sem rede. Cartão terminado em 0002 é recusado; os demais são aprovados.
+    O PIX nunca é pago sozinho — confirme pelo Admin (ação disponível só no modo simulado)."""
 
-    def criar_ou_recuperar_cliente(self, *, nome, cpf, email, telefone=''):
-        digest = hashlib.sha1(cpf.encode()).hexdigest()[:12]
-        return f'cus_fake_{digest}'
+    def criar_ou_recuperar_cliente(self, *, nome, cpf, email, telefone):
+        return f'cus_fake_{hashlib.sha1(cpf.encode()).hexdigest()[:12]}'
 
-    def criar_cobranca(self, *, customer_id, valor, metodo, descricao, referencia):
+    def cobrar_pix(self, *, customer_id, valor, descricao, referencia):
         payment_id = f'pay_fake_{uuid.uuid4().hex[:16]}'
-        info = {'asaas_payment_id': payment_id, 'metodo': metodo}
-        base = f'https://sandbox.asaas.com/i/{payment_id}'
-        if metodo == 'PIX':
-            info['url_pagamento'] = base
-            info['pix_qrcode_base64'] = 'iVBORw0KGgoFAKEQRCODEBASE64=='
-            info['pix_copia_cola'] = f'00020126FAKE-PIX-{payment_id}'
-        elif metodo == 'BOLETO':
-            info['url_pagamento'] = f'{base}/boleto.pdf'
-            info['boleto_linha_digitavel'] = '34191.79001 01043.510047 91020.150008 1 99990000010000'
-        else:  # CARTAO
-            info['url_pagamento'] = f'{base}/checkout'
-        return info
+        return {
+            'payment_id': payment_id,
+            # PNG 1x1 transparente — só para a tela ter o que exibir.
+            'pix_qrcode': (
+                'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII='
+            ),
+            'pix_copia_cola': f'00020126580014br.gov.bcb.pix-FAKE-{payment_id}',
+        }
 
+    def cobrar_cartao(self, *, customer_id, valor_total, parcelas, descricao, referencia,
+                      cartao, titular, ip):
+        if cartao['numero'].endswith('0002'):
+            raise AsaasError('Transação não autorizada pelo emissor do cartão.', recusado=True)
+        return {
+            'payment_id': f'pay_fake_{uuid.uuid4().hex[:16]}',
+            'installment_id': f'ins_fake_{uuid.uuid4().hex[:12]}' if parcelas > 1 else '',
+            'pago': True,
+        }
 
-def _due_date():
-    from datetime import date, timedelta
-    return (date.today() + timedelta(days=3)).isoformat()
+    def pagamento_confirmado(self, payment_id):
+        return False
+
+    def cancelar_cobranca(self, payment_id):
+        return None
+
+    def estornar(self, *, payment_id, installment_id=''):
+        return None
 
 
 def get_asaas_client():

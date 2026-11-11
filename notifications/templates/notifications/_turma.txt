@@ -1,0 +1,6 @@
+{{ tipo }}: {{ produto }}
+Turma: {{ turma }}
+Período: {{ inicio|date:"d/m/Y" }} a {{ fim|date:"d/m/Y" }}
+Local: {{ endereco }}
+{% for c in cursos %}
+- {{ c.curso }} ({{ c.inicio|date:"d/m" }}–{{ c.fim|date:"d/m/Y" }}) | Horários: {{ c.horarios|join:", "|default:"a definir" }} | Professores: {{ c.professores|join:", "|default:"a definir" }}{% endfor %}

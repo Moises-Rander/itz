@@ -1,9 +1,0 @@
-{% extends 'notifications/base.txt' %}
-{% block conteudo %}Olá, {{ nome }}.
-
-Informamos que a sua matrícula na turma {{ turma }} não pôde ser aprovada.
-
-Motivo: {{ motivo }}
-
-Em caso de dúvidas, entre em contato com a nossa secretaria.
-{% endblock %}

@@ -1,144 +1,169 @@
-from django.contrib import admin
-from django.core.exceptions import ValidationError
+from django.conf import settings
+from django.contrib import admin, messages
 from django.utils.html import format_html
 
-from .models import Cupom, Documento, Matricula, Promocao
-from .services import aprovar_matricula, rejeitar_matricula
+from .asaas import AsaasError
+from .models import Aluno, Cupom, Matricula, Promocao, TaxaParcelamento, Vaga
+from .services import cancelar_e_estornar, confirmar_matricula
 
 
-class DocumentoInline(admin.TabularInline):
-    model = Documento
+class SomenteLeituraInline(admin.TabularInline):
     extra = 0
-    fields = ('tipo', 'arquivo', 'preview', 'status')
-    readonly_fields = ('preview',)
+    can_delete = False
+    show_change_link = True
 
-    @admin.display(description='visualizar/baixar')
-    def preview(self, obj):
-        if obj and obj.arquivo:
-            return format_html('<a href="{}" target="_blank">abrir arquivo</a>', obj.arquivo.url)
-        return '—'
+    def has_add_permission(self, request, obj=None):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+
+class MatriculaDoAlunoInline(SomenteLeituraInline):
+    model = Matricula
+    fields = ('turma', 'status', 'metodo', 'valor_total', 'criada_em')
+    readonly_fields = fields
+
+
+@admin.register(Aluno)
+class AlunoAdmin(admin.ModelAdmin):
+    list_display = ('nome_completo', 'cpf_formatado', 'email', 'telefone', 'criado_em')
+    search_fields = ('nome', 'sobrenome', 'cpf', 'email', 'telefone')
+    readonly_fields = ('asaas_customer_id', 'criado_em')
+    inlines = (MatriculaDoAlunoInline,)
+
+    @admin.display(description='nome', ordering='nome')
+    def nome_completo(self, obj):
+        return obj.nome_completo
+
+    @admin.display(description='CPF', ordering='cpf')
+    def cpf_formatado(self, obj):
+        return obj.cpf_formatado
+
+
+class VagaInline(SomenteLeituraInline):
+    model = Vaga
+    fields = ('turma',)
+    readonly_fields = fields
+    verbose_name_plural = 'vagas ocupadas (turmas de curso)'
 
 
 @admin.register(Matricula)
 class MatriculaAdmin(admin.ModelAdmin):
     list_display = (
-        'id', 'candidato_nome', 'turma', 'status', 'metodo_pagamento',
-        'valor_final', 'pagamento_asaas', 'data_criacao',
+        'id', 'aluno', 'turma', 'status_col', 'metodo', 'parcelas', 'valor_total', 'criada_em',
     )
-    list_display_links = ('id', 'candidato_nome')
-    list_filter = ('status', 'metodo_pagamento', 'turma__curso', 'turma')
+    list_display_links = ('id', 'aluno')
+    list_filter = ('status', 'metodo', 'turma__curso', 'turma__graduacao')
     search_fields = (
-        'candidato_nome', 'candidato_email', 'candidato_cpf',
-        'aluno__user__email', 'turma__nome', 'asaas_payment_id',
+        'aluno__nome', 'aluno__sobrenome', 'aluno__cpf', 'aluno__email', 'asaas_payment_id',
     )
-    readonly_fields = (
-        'data_criacao', 'resumo_financeiro', 'pagamento_asaas', 'upload_token',
-    )
-    autocomplete_fields = ('aluno', 'turma', 'cupom', 'promocao')
-    inlines = (DocumentoInline,)
-    actions = ('aprovar_matriculas', 'rejeitar_matriculas')
+    date_hierarchy = 'criada_em'
+    inlines = (VagaInline,)
+    actions = ('cancelar_estornar',)
     fieldsets = (
-        ('Candidato', {
-            'fields': (
-                'candidato_nome', 'candidato_email', 'candidato_cpf',
-                'candidato_telefone', 'candidato_data_nascimento',
-            ),
-        }),
-        ('Matrícula', {'fields': ('turma', 'status', 'motivo_rejeicao', 'aluno')}),
-        ('Financeiro', {
-            'fields': (
-                'metodo_pagamento', 'valor_original', 'desconto_cupom',
-                'desconto_promocao', 'valor_final', 'resumo_financeiro',
-                'cupom', 'promocao',
-            ),
-        }),
-        ('Pagamento (Asaas)', {
-            'fields': ('asaas_payment_id', 'url_pagamento', 'pagamento_asaas'),
-        }),
-        ('Metadados', {'fields': ('upload_token', 'data_criacao')}),
+        (None, {'fields': ('aluno', 'turma', 'status', 'observacao')}),
+        ('Valores', {'fields': (
+            'valor_original', 'promocao', 'desconto_promocao', 'cupom', 'desconto_cupom',
+            'valor_a_vista', 'metodo', 'parcelas', 'valor_total',
+        )}),
+        ('Pagamento (Asaas)', {'fields': (
+            'asaas_payment_id', 'asaas_installment_id', 'reserva_expira_em',
+        )}),
+        ('Registro', {'fields': (
+            'termos_aceitos_em', 'ip', 'criada_em', 'confirmada_em', 'cancelada_em',
+        )}),
     )
 
-    @admin.display(description='Resumo do valor')
-    def resumo_financeiro(self, obj):
-        return format_html(
-            'Original: <b>R$ {}</b> — Promoção: −R$ {} — Cupom: −R$ {} '
-            '⇒ Final: <b>R$ {}</b>',
-            obj.valor_original, obj.desconto_promocao, obj.desconto_cupom, obj.valor_final,
-        )
+    def get_readonly_fields(self, request, obj=None):
+        # Tudo vem do checkout/Asaas; só a observação é editável à mão.
+        return [f.name for f in Matricula._meta.fields if f.name != 'observacao']
 
-    @admin.display(description='Pagamento Asaas')
-    def pagamento_asaas(self, obj):
-        if obj.valor_final == 0:
-            return 'Isento (sem cobrança)'
-        if not obj.asaas_payment_id:
-            return 'Sem cobrança gerada'
-        confirmado = obj.status in (
-            Matricula.Status.AGUARDANDO_VALIDACAO, Matricula.Status.APROVADA
-        )
-        rotulo = 'Confirmado' if confirmado else 'Aguardando'
-        if obj.url_pagamento:
-            return format_html(
-                '{} — <a href="{}" target="_blank">{}</a>',
-                rotulo, obj.url_pagamento, obj.asaas_payment_id,
-            )
-        return f'{rotulo} — {obj.asaas_payment_id}'
+    def has_add_permission(self, request):
+        return False
 
-    @admin.action(description='Aprovar matrículas selecionadas')
-    def aprovar_matriculas(self, request, queryset):
-        aprovadas = 0
-        for matricula in queryset.exclude(status=Matricula.Status.APROVADA):
+    def get_actions(self, request):
+        actions = super().get_actions(request)
+        if settings.ASAAS_FAKE:
+            actions['simular_pagamento'] = self.get_action('simular_pagamento')
+        return actions
+
+    @admin.display(description='status', ordering='status')
+    def status_col(self, obj):
+        cores = {
+            Matricula.Status.CONFIRMADA: '#15803d', Matricula.Status.PENDENTE: '#b45309',
+            Matricula.Status.CANCELADA: '#b91c1c', Matricula.Status.RECUSADA: '#b91c1c',
+        }
+        rotulo = obj.get_status_display()
+        if obj.status == Matricula.Status.PENDENTE and not obj.reserva_ativa():
+            rotulo = 'Expirada (não paga)'
+        return format_html('<b style="color:{}">{}</b>', cores.get(obj.status, '#666'), rotulo)
+
+    @admin.action(description='Cancelar e estornar (libera as vagas)')
+    def cancelar_estornar(self, request, queryset):
+        feitas = 0
+        for m in queryset:
             try:
-                aprovar_matricula(matricula)
-                aprovadas += 1
-            except ValidationError as exc:
-                self.message_user(
-                    request, f'#{matricula.id}: {exc.messages[0]}', level='warning'
-                )
-        if aprovadas:
-            self.message_user(
-                request,
-                f'{aprovadas} matrícula(s) aprovada(s). Contas de aluno criadas e '
-                'email de definição de senha enviado.',
-            )
+                cancelar_e_estornar(m, motivo=f'Cancelada por {request.user.email}.')
+                feitas += 1
+            except (ValueError, AsaasError) as exc:
+                self.message_user(request, f'#{m.pk}: {exc}', level=messages.WARNING)
+        if feitas:
+            self.message_user(request, f'{feitas} matrícula(s) cancelada(s) e estornada(s).')
 
-    @admin.action(description='Rejeitar matrículas selecionadas')
-    def rejeitar_matriculas(self, request, queryset):
-        atualizadas = 0
-        for matricula in queryset.exclude(status=Matricula.Status.REJEITADA):
-            motivo = matricula.motivo_rejeicao or 'Rejeitada pelo administrador.'
-            rejeitar_matricula(matricula, motivo)
-            atualizadas += 1
-        if atualizadas:
-            self.message_user(
-                request,
-                f'{atualizadas} matrícula(s) rejeitada(s); candidato(s) notificado(s) por email. '
-                'Para um motivo específico, preencha-o na matrícula antes de rejeitar.',
-            )
-
-
-@admin.register(Documento)
-class DocumentoAdmin(admin.ModelAdmin):
-    list_display = ('matricula', 'tipo', 'status')
-    list_filter = ('tipo', 'status')
-    search_fields = ('matricula__candidato_cpf', 'matricula__candidato_email')
-    autocomplete_fields = ('matricula',)
+    @admin.action(description='[Modo simulado] Marcar pagamento como recebido')
+    def simular_pagamento(self, request, queryset):
+        feitas = sum(1 for m in queryset if confirmar_matricula(m))
+        self.message_user(request, f'{feitas} matrícula(s) confirmada(s) (simulação).')
 
 
 @admin.register(Cupom)
 class CupomAdmin(admin.ModelAdmin):
     list_display = (
-        'codigo', 'tipo_desconto', 'valor_desconto', 'data_inicio', 'data_fim',
+        'codigo', 'tipo_desconto', 'valor_desconto', 'restrito_a', 'data_inicio', 'data_fim',
         'usos_atuais', 'max_usos', 'is_ativo',
     )
-    list_filter = ('tipo_desconto', 'is_ativo', 'curso')
+    list_filter = ('tipo_desconto', 'is_ativo')
     search_fields = ('codigo',)
     readonly_fields = ('usos_atuais',)
-    autocomplete_fields = ('curso',)
+    autocomplete_fields = ('curso', 'graduacao')
+    fieldsets = (
+        (None, {'fields': (
+            'codigo', 'tipo_desconto', 'valor_desconto', ('data_inicio', 'data_fim'),
+            'max_usos', 'usos_atuais', 'is_ativo',
+        )}),
+        ('Restringir a (opcional — preencha no máximo um)', {
+            'fields': ('turma', 'curso', 'graduacao'),
+        }),
+    )
+
+    @admin.display(description='vale para')
+    def restrito_a(self, obj):
+        return obj.turma or obj.curso or obj.graduacao or 'Tudo'
 
 
 @admin.register(Promocao)
 class PromocaoAdmin(admin.ModelAdmin):
-    list_display = ('__str__', 'tipo_desconto', 'valor', 'data_inicio', 'data_fim', 'is_ativa')
-    list_filter = ('tipo_desconto', 'is_ativa', 'curso', 'turma')
-    search_fields = ('curso__nome', 'turma__nome')
-    autocomplete_fields = ('turma', 'curso')
+    list_display = (
+        '__str__', 'tipo_desconto', 'valor', 'restrito_a', 'data_inicio', 'data_fim', 'is_ativa',
+    )
+    list_filter = ('tipo_desconto', 'is_ativa')
+    autocomplete_fields = ('curso', 'graduacao')
+    fieldsets = (
+        (None, {'fields': (
+            'nome', 'tipo_desconto', 'valor', ('data_inicio', 'data_fim'), 'is_ativa',
+        )}),
+        ('Restringir a (opcional — preencha no máximo um)', {
+            'fields': ('turma', 'curso', 'graduacao'),
+        }),
+    )
+
+    @admin.display(description='vale para')
+    def restrito_a(self, obj):
+        return obj.turma or obj.curso or obj.graduacao or 'Tudo'
+
+
+@admin.register(TaxaParcelamento)
+class TaxaParcelamentoAdmin(admin.ModelAdmin):
+    list_display = ('parcelas', 'acrescimo_percentual')
+    list_editable = ('acrescimo_percentual',)

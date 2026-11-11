@@ -1,9 +1,0 @@
-{% extends 'notifications/base.txt' %}
-{% block conteudo %}Olá, {{ nome }}!
-
-Recebemos um pedido para redefinir sua senha. Use o link abaixo (válido por 24 horas):
-
-{{ link }}
-
-Se você não solicitou, ignore este email — sua senha permanece a mesma.
-{% endblock %}

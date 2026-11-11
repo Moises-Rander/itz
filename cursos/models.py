@@ -1,239 +1,106 @@
+"""Catálogo: Cursos avulsos, Graduações (Módulos → Cursos), Turmas e Professores.
+
+- Curso: uma disciplina (ex.: Hebraico Básico). Existe por si só e pode ser
+  vendido avulso; também pode compor várias Graduações.
+- Graduação: N Módulos ordenados; cada Módulo tem N Cursos ordenados.
+- Turma: oferta de um Curso OU de uma Graduação (exatamente um dos dois).
+  A turma de Graduação é um pacote de turmas de curso ("turmas compartilhadas"):
+  quem compra a Graduação estuda junto com quem comprou o curso avulso.
+"""
 from django.core.exceptions import ValidationError
-from django.db import models, transaction
+from django.db import models
+from django.utils import timezone
+from django.utils.text import slugify
 
 
-class TipoCurso(models.TextChoices):
-    GRADUACAO = 'GRADUACAO', 'Graduação'
-    FORMACAO = 'FORMACAO', 'Formação'
+def _slug_unico(instancia, origem):
+    base = slugify(origem)[:200] or 'item'
+    slug, n = base, 2
+    modelo = type(instancia)
+    while modelo.objects.filter(slug=slug).exclude(pk=instancia.pk).exists():
+        slug = f'{base}-{n}'
+        n += 1
+    return slug
 
 
-class DiaSemana(models.TextChoices):
-    SEG = 'SEG', 'Segunda-feira'
-    TER = 'TER', 'Terça-feira'
-    QUA = 'QUA', 'Quarta-feira'
-    QUI = 'QUI', 'Quinta-feira'
-    SEX = 'SEX', 'Sexta-feira'
-    SAB = 'SAB', 'Sábado'
+class Professor(models.Model):
+    """Professor exibido no site (sem conta de acesso)."""
 
-
-# Dias permitidos na grade da Graduação (aulas presenciais noturnas + sábado).
-DIAS_GRADUACAO = [
-    (DiaSemana.SEG.value, DiaSemana.SEG.label),
-    (DiaSemana.QUA.value, DiaSemana.QUA.label),
-    (DiaSemana.SAB.value, DiaSemana.SAB.label),
-]
-
-
-class Curso(models.Model):
     nome = models.CharField('nome', max_length=150)
-    descricao = models.TextField('descrição', blank=True)
-    imagem = models.ImageField('imagem', upload_to='cursos/', null=True, blank=True)
-    tipo = models.CharField('tipo', max_length=20, choices=TipoCurso.choices)
-    carga_horaria = models.PositiveIntegerField('carga horária (horas)', default=0)
-    preco_base = models.DecimalField('preço base', max_digits=10, decimal_places=2)
+    titulacao = models.CharField('titulação', max_length=150, blank=True)
+    bio = models.TextField('bio', blank=True)
+    foto = models.ImageField('foto', upload_to='professores/', null=True, blank=True)
+    exibir_na_home = models.BooleanField('exibir na home', default=False)
+    ordem = models.PositiveIntegerField('ordem', default=0)
 
     class Meta:
-        verbose_name = 'curso'
-        verbose_name_plural = 'cursos'
-        ordering = ['nome']
-
-    def __str__(self):
-        return f'{self.nome} ({self.get_tipo_display()})'
-
-    @property
-    def is_graduacao(self):
-        return self.tipo == TipoCurso.GRADUACAO
-
-    @property
-    def is_formacao(self):
-        return self.tipo == TipoCurso.FORMACAO
-
-
-class Turma(models.Model):
-    class Status(models.TextChoices):
-        ABERTA = 'ABERTA', 'Aberta'
-        FECHADA = 'FECHADA', 'Fechada'
-        ENCERRADA = 'ENCERRADA', 'Encerrada'
-
-    curso = models.ForeignKey(
-        Curso, on_delete=models.CASCADE, related_name='turmas', verbose_name='curso'
-    )
-    nome = models.CharField('nome/identificação', max_length=120, blank=True)
-    vagas_totais = models.PositiveIntegerField('vagas totais', default=0)
-    status = models.CharField(
-        'status', max_length=20, choices=Status.choices, default=Status.ABERTA
-    )
-    # Aplicável apenas a turmas de Graduação (prazo de matrícula após o vestibular).
-    prazo_matricula_pos_vestibular = models.DateField(
-        'prazo de matrícula pós-vestibular', null=True, blank=True
-    )
-
-    class Meta:
-        verbose_name = 'turma'
-        verbose_name_plural = 'turmas'
-        ordering = ['curso', 'nome']
-
-    def __str__(self):
-        return f'{self.curso.nome} — {self.nome or f"Turma #{self.pk}"}'
-
-    @property
-    def vagas_ocupadas(self):
-        """Calculado a partir das matrículas APROVADAS desta turma."""
-        return self.matriculas.filter(status='APROVADA').count()
-
-    @property
-    def vagas_disponiveis(self):
-        return max(self.vagas_totais - self.vagas_ocupadas, 0)
-
-    @property
-    def lotada(self):
-        return self.vagas_ocupadas >= self.vagas_totais
-
-    def sincronizar_status_vagas(self, save=True):
-        """Fecha a turma automaticamente ao atingir as vagas totais.
-
-        Apenas fecha — nunca reabre: o Admin pode fechar uma turma com vagas
-        manualmente e a reabertura também é uma ação manual (ver V3). Não
-        altera turmas ENCERRADAS.
-        """
-        if self.status == self.Status.ENCERRADA:
-            return
-        if self.lotada and self.status == self.Status.ABERTA:
-            self.status = self.Status.FECHADA
-            if save:
-                Turma.objects.filter(pk=self.pk).update(status=self.Status.FECHADA)
-
-    def clean(self):
-        if self.prazo_matricula_pos_vestibular and self.curso_id and not self.curso.is_graduacao:
-            raise ValidationError(
-                {'prazo_matricula_pos_vestibular':
-                    'Prazo de matrícula pós-vestibular só se aplica a turmas de Graduação.'}
-            )
-
-
-class Disciplina(models.Model):
-    """Disciplina pertence a um Curso de Graduação (currículo compartilhado)."""
-
-    curso = models.ForeignKey(
-        Curso, on_delete=models.CASCADE, related_name='disciplinas', verbose_name='curso'
-    )
-    nome = models.CharField('nome', max_length=150)
-    descricao = models.TextField('descrição', blank=True)
-    ementa = models.TextField('ementa', blank=True)
-
-    class Meta:
-        verbose_name = 'disciplina'
-        verbose_name_plural = 'disciplinas'
-        ordering = ['curso', 'nome']
+        verbose_name = 'professor'
+        verbose_name_plural = 'professores'
+        ordering = ['ordem', 'nome']
 
     def __str__(self):
         return self.nome
 
-    def clean(self):
-        if self.curso_id and not self.curso.is_graduacao:
-            raise ValidationError(
-                {'curso': 'Disciplinas só podem pertencer a cursos de Graduação.'}
-            )
 
+class ProdutoBase(models.Model):
+    """Campos comuns de Curso e Graduação (o que aparece na vitrine)."""
 
-class Ciclo(models.Model):
-    """Período de 6 semanas de uma Turma de Graduação. Apenas um ciclo ativo por turma."""
-
-    turma = models.ForeignKey(
-        Turma, on_delete=models.CASCADE, related_name='ciclos', verbose_name='turma'
+    nome = models.CharField('nome', max_length=150)
+    slug = models.SlugField(
+        'endereço na URL', max_length=220, unique=True, blank=True,
+        help_text='Gerado a partir do nome se ficar em branco.',
     )
-    numero = models.PositiveIntegerField('número do ciclo')
-    data_inicio = models.DateField('data de início')
-    data_fim = models.DateField('data de fim')
-    is_ativo = models.BooleanField('ativo', default=False)
+    resumo = models.CharField(
+        'resumo', max_length=300, blank=True, help_text='Texto curto exibido no card.'
+    )
+    descricao = models.TextField('descrição', blank=True)
+    imagem = models.ImageField('imagem', upload_to='catalogo/', null=True, blank=True)
+    publicado = models.BooleanField(
+        'publicado', default=True,
+        help_text='Desmarque para esconder do site mesmo com turmas abertas.',
+    )
 
     class Meta:
-        verbose_name = 'ciclo'
-        verbose_name_plural = 'ciclos'
-        ordering = ['turma', 'numero']
-        constraints = [
-            models.UniqueConstraint(
-                fields=['turma', 'numero'], name='ciclo_numero_unico_por_turma'
-            ),
-            # Garante no máximo um ciclo ativo por turma.
-            models.UniqueConstraint(
-                fields=['turma'],
-                condition=models.Q(is_ativo=True),
-                name='ciclo_unico_ativo_por_turma',
-            ),
-        ]
+        abstract = True
+        ordering = ['nome']
 
     def __str__(self):
-        return f'{self.turma} — Ciclo {self.numero}'
+        return self.nome
 
-    def ativar(self):
-        """Ativa este ciclo, desativando qualquer outro ativo da mesma turma."""
-        with transaction.atomic():
-            Ciclo.objects.filter(turma=self.turma, is_ativo=True).exclude(
-                pk=self.pk
-            ).update(is_ativo=False)
-            self.is_ativo = True
-            self.save(update_fields=['is_ativo'])
-
-    def clean(self):
-        if self.turma_id and not self.turma.curso.is_graduacao:
-            raise ValidationError('Ciclos só existem em turmas de Graduação.')
-        if self.data_inicio and self.data_fim and self.data_fim < self.data_inicio:
-            raise ValidationError({'data_fim': 'A data de fim não pode ser anterior ao início.'})
-        if self.is_ativo and self.turma_id:
-            outro = Ciclo.objects.filter(turma=self.turma, is_ativo=True).exclude(pk=self.pk)
-            if outro.exists():
-                raise ValidationError(
-                    'Já existe um ciclo ativo nesta turma. Desative-o antes de ativar outro.'
-                )
+    def save(self, *args, **kwargs):
+        if not self.slug:
+            self.slug = _slug_unico(self, self.nome)
+        super().save(*args, **kwargs)
 
 
-class GradeHoraria(models.Model):
-    """Template de horários de um Ciclo: em qual dia/horário e quantos slots uma
-    disciplina ocorre naquele ciclo."""
+class Curso(ProdutoBase):
+    ementa = models.TextField('ementa', blank=True)
+    carga_horaria = models.PositiveIntegerField('carga horária (horas)', default=0)
 
-    ciclo = models.ForeignKey(
-        Ciclo, on_delete=models.CASCADE, related_name='grades', verbose_name='ciclo'
-    )
-    disciplina = models.ForeignKey(
-        Disciplina, on_delete=models.CASCADE, related_name='grades', verbose_name='disciplina'
-    )
-    dia_semana = models.CharField('dia da semana', max_length=3, choices=DIAS_GRADUACAO)
-    horario = models.TimeField('horário de início')
-    slots = models.PositiveSmallIntegerField('slots de aula', default=1)
+    class Meta(ProdutoBase.Meta):
+        verbose_name = 'curso'
+        verbose_name_plural = 'cursos'
 
-    class Meta:
-        verbose_name = 'grade horária'
-        verbose_name_plural = 'grades horárias'
-        ordering = ['ciclo', 'dia_semana', 'horario']
-        constraints = [
-            models.UniqueConstraint(
-                fields=['ciclo', 'disciplina', 'dia_semana'],
-                name='grade_unica_por_ciclo_disciplina_dia',
-            )
-        ]
 
-    def __str__(self):
-        return f'{self.disciplina} — {self.get_dia_semana_display()} {self.horario:%H:%M}'
+class Graduacao(ProdutoBase):
+    class Meta(ProdutoBase.Meta):
+        verbose_name = 'graduação'
+        verbose_name_plural = 'graduações'
 
-    def clean(self):
-        if self.disciplina_id and self.ciclo_id:
-            if self.disciplina.curso_id != self.ciclo.turma.curso_id:
-                raise ValidationError(
-                    {'disciplina': 'A disciplina deve pertencer ao mesmo curso da turma do ciclo.'}
-                )
+    def cursos(self):
+        """Cursos da grade, na ordem módulo → curso."""
+        return Curso.objects.filter(modulos_curso__modulo__graduacao=self).order_by(
+            'modulos_curso__modulo__ordem', 'modulos_curso__ordem'
+        )
+
+    @property
+    def carga_horaria(self):
+        return sum(c.carga_horaria for c in self.cursos())
 
 
 class Modulo(models.Model):
-    """Módulo do currículo de um Curso de Formação.
-
-    Assim como a Disciplina na Graduação, o módulo é definido no nível do Curso
-    e compartilhado por todas as turmas daquele curso. O estado de progresso
-    (ativo/concluído) é rastreado por turma em ``ProgressoModuloTurma``.
-    """
-
-    curso = models.ForeignKey(
-        Curso, on_delete=models.CASCADE, related_name='modulos', verbose_name='curso'
+    graduacao = models.ForeignKey(
+        Graduacao, on_delete=models.CASCADE, related_name='modulos', verbose_name='graduação'
     )
     nome = models.CharField('nome', max_length=150)
     descricao = models.TextField('descrição', blank=True)
@@ -242,193 +109,266 @@ class Modulo(models.Model):
     class Meta:
         verbose_name = 'módulo'
         verbose_name_plural = 'módulos'
-        ordering = ['curso', 'ordem']
+        ordering = ['graduacao', 'ordem']
         constraints = [
             models.UniqueConstraint(
-                fields=['curso', 'ordem'], name='modulo_ordem_unica_por_curso'
+                fields=['graduacao', 'ordem'], name='modulo_ordem_unica_por_graduacao'
             ),
         ]
 
     def __str__(self):
-        return f'{self.nome} (#{self.ordem})'
+        return f'{self.graduacao} — {self.ordem}. {self.nome}'
+
+
+class ModuloCurso(models.Model):
+    """Curso dentro de um Módulo (com a ordem de exibição)."""
+
+    modulo = models.ForeignKey(
+        Modulo, on_delete=models.CASCADE, related_name='itens', verbose_name='módulo'
+    )
+    curso = models.ForeignKey(
+        Curso, on_delete=models.PROTECT, related_name='modulos_curso', verbose_name='curso'
+    )
+    ordem = models.PositiveIntegerField('ordem', default=1)
+
+    class Meta:
+        verbose_name = 'curso do módulo'
+        verbose_name_plural = 'cursos do módulo'
+        ordering = ['modulo', 'ordem']
+        constraints = [
+            models.UniqueConstraint(fields=['modulo', 'curso'], name='curso_unico_por_modulo'),
+        ]
+
+    def __str__(self):
+        return f'{self.modulo} → {self.curso}'
 
     def clean(self):
-        if self.curso_id and not self.curso.is_formacao:
-            raise ValidationError(
-                {'curso': 'Módulos só podem pertencer a cursos de Formação.'}
-            )
+        # O mesmo curso não pode aparecer em dois módulos da mesma graduação.
+        if self.modulo_id and self.curso_id:
+            repetido = ModuloCurso.objects.filter(
+                modulo__graduacao_id=self.modulo.graduacao_id, curso_id=self.curso_id
+            ).exclude(pk=self.pk)
+            if repetido.exists():
+                raise ValidationError({'curso': 'Este curso já está em outro módulo desta graduação.'})
 
 
-class ProgressoModuloTurma(models.Model):
-    """Estado de progresso de um Módulo dentro de uma Turma de Formação.
+class Turma(models.Model):
+    """Oferta de um Curso OU de uma Graduação.
 
-    Espelha o papel do Ciclo na Graduação: apenas um módulo pode estar ativo
-    por turma por vez. O admin altera o estado manualmente.
+    - Turma de curso: tem datas, vagas, horários e professores próprios.
+    - Turma de graduação: é composta por turmas de curso (uma por curso da
+      grade); datas, horários, professores e vagas vêm delas.
     """
 
     class Status(models.TextChoices):
-        PENDENTE = 'PENDENTE', 'Pendente'
-        ATIVO = 'ATIVO', 'Ativo'
-        CONCLUIDO = 'CONCLUIDO', 'Concluído'
+        RASCUNHO = 'RASCUNHO', 'Rascunho (não aparece no site)'
+        PUBLICADA = 'PUBLICADA', 'Publicada'
+        FECHADA = 'FECHADA', 'Fechada manualmente'
 
-    turma = models.ForeignKey(
-        Turma, on_delete=models.CASCADE,
-        related_name='progressos_modulo', verbose_name='turma',
+    curso = models.ForeignKey(
+        Curso, on_delete=models.PROTECT, null=True, blank=True,
+        related_name='turmas', verbose_name='curso',
     )
-    modulo = models.ForeignKey(
-        Modulo, on_delete=models.CASCADE,
-        related_name='progressos', verbose_name='módulo',
+    graduacao = models.ForeignKey(
+        Graduacao, on_delete=models.PROTECT, null=True, blank=True,
+        related_name='turmas', verbose_name='graduação',
     )
+    codigo = models.CharField('código', max_length=40, help_text='Ex.: 2027.1')
     status = models.CharField(
-        'status', max_length=20, choices=Status.choices, default=Status.PENDENTE
+        'status', max_length=12, choices=Status.choices, default=Status.RASCUNHO
     )
-    is_ativo = models.BooleanField('ativo', default=False)
+    preco = models.DecimalField('preço à vista (R$)', max_digits=10, decimal_places=2)
+
+    # --- Só turma de curso ---
+    data_inicio = models.DateField('data de início', null=True, blank=True)
+    data_fim = models.DateField('data de fim', null=True, blank=True)
+    vagas = models.PositiveIntegerField('vagas', null=True, blank=True)
+    professores = models.ManyToManyField(
+        Professor, blank=True, related_name='turmas', verbose_name='professores'
+    )
+
+    # --- Só turma de graduação ---
+    turmas_curso = models.ManyToManyField(
+        'self', symmetrical=False, blank=True, related_name='turmas_graduacao',
+        limit_choices_to={'curso__isnull': False},
+        verbose_name='turmas de curso',
+        help_text='Uma turma para cada curso da grade da graduação.',
+    )
 
     class Meta:
-        verbose_name = 'progresso de módulo na turma'
-        verbose_name_plural = 'progressos de módulos nas turmas'
-        ordering = ['turma', 'modulo']
+        verbose_name = 'turma'
+        verbose_name_plural = 'turmas'
+        ordering = ['-id']
         constraints = [
-            models.UniqueConstraint(
-                fields=['turma', 'modulo'], name='progresso_unico_por_turma_modulo'
-            ),
-            # Garante no máximo um módulo ativo por turma.
-            models.UniqueConstraint(
-                fields=['turma'],
-                condition=models.Q(is_ativo=True),
-                name='progresso_unico_ativo_por_turma',
-            ),
-        ]
-
-    def __str__(self):
-        return f'{self.turma} — {self.modulo} [{self.get_status_display()}]'
-
-    def modulo_anterior(self):
-        """Módulo imediatamente anterior na sequência do curso (ou None)."""
-        return Modulo.objects.filter(
-            curso=self.modulo.curso, ordem__lt=self.modulo.ordem
-        ).order_by('-ordem').first()
-
-    def ativar(self):
-        """Ativa este módulo na turma.
-
-        - Exige que o módulo anterior na sequência esteja CONCLUÍDO (exceto o
-          primeiro, que pode ser ativado livremente).
-        - Desativa o módulo atualmente ativo da turma, marcando-o como CONCLUÍDO.
-        """
-        anterior = self.modulo_anterior()
-        if anterior is not None:
-            prog_ant = ProgressoModuloTurma.objects.filter(
-                turma=self.turma, modulo=anterior
-            ).first()
-            # O anterior precisa já ter sido iniciado: CONCLUÍDO, ou ATIVO (caso
-            # em que esta ativação o concluirá). Bloqueia se ainda PENDENTE/inexistente.
-            if prog_ant is None or prog_ant.status == self.Status.PENDENTE:
-                raise ValidationError(
-                    'O módulo anterior precisa estar concluído (ou ativo) antes de ativar este.'
-                )
-        with transaction.atomic():
-            ProgressoModuloTurma.objects.filter(
-                turma=self.turma, is_ativo=True
-            ).exclude(pk=self.pk).update(
-                status=self.Status.CONCLUIDO, is_ativo=False
-            )
-            self.status = self.Status.ATIVO
-            self.is_ativo = True
-            self.save(update_fields=['status', 'is_ativo'])
-
-    def clean(self):
-        if self.turma_id and not self.turma.curso.is_formacao:
-            raise ValidationError('Progresso de módulo só existe em turmas de Formação.')
-        if self.modulo_id and self.turma_id and self.modulo.curso_id != self.turma.curso_id:
-            raise ValidationError(
-                {'modulo': 'O módulo deve pertencer ao mesmo curso da turma.'}
-            )
-        # is_ativo e status=ATIVO andam juntos.
-        if self.is_ativo and self.status != self.Status.ATIVO:
-            raise ValidationError(
-                {'is_ativo': 'Para marcar como ativo, o status deve ser ATIVO.'}
-            )
-        if self.is_ativo and self.turma_id:
-            outro = ProgressoModuloTurma.objects.filter(
-                turma=self.turma, is_ativo=True
-            ).exclude(pk=self.pk)
-            if outro.exists():
-                raise ValidationError(
-                    'Já existe um módulo ativo nesta turma. '
-                    'Conclua/pause-o antes de ativar outro.'
-                )
-
-
-class HorarioFormacao(models.Model):
-    """Horário das aulas de uma Turma de Formação (dois dias da semana)."""
-
-    turma = models.ForeignKey(
-        Turma, on_delete=models.CASCADE, related_name='horarios_formacao', verbose_name='turma'
-    )
-    dia_1 = models.CharField('primeiro dia', max_length=3, choices=DiaSemana.choices)
-    dia_2 = models.CharField('segundo dia', max_length=3, choices=DiaSemana.choices)
-    horario_inicio = models.TimeField('horário de início')
-    duracao_minutos = models.PositiveSmallIntegerField('duração do slot (min)', default=60)
-
-    class Meta:
-        verbose_name = 'horário de formação'
-        verbose_name_plural = 'horários de formação'
-
-    def __str__(self):
-        return f'{self.turma} — {self.get_dia_1_display()}/{self.get_dia_2_display()}'
-
-    def clean(self):
-        if self.turma_id and not self.turma.curso.is_formacao:
-            raise ValidationError('Horário de Formação só se aplica a turmas de Formação.')
-        if self.dia_1 and self.dia_2 and self.dia_1 == self.dia_2:
-            raise ValidationError({'dia_2': 'Os dois dias da semana devem ser diferentes.'})
-
-
-class AtribuicaoProfessor(models.Model):
-    """Vincula um Professor a uma Turma e a uma Disciplina (Graduação) OU a um
-    Módulo (Formação) — exatamente um dos dois."""
-
-    professor = models.ForeignKey(
-        'accounts.Professor', on_delete=models.CASCADE,
-        related_name='atribuicoes', verbose_name='professor',
-    )
-    turma = models.ForeignKey(
-        Turma, on_delete=models.CASCADE, related_name='atribuicoes', verbose_name='turma'
-    )
-    disciplina = models.ForeignKey(
-        Disciplina, on_delete=models.CASCADE, null=True, blank=True,
-        related_name='atribuicoes', verbose_name='disciplina',
-    )
-    modulo = models.ForeignKey(
-        Modulo, on_delete=models.CASCADE, null=True, blank=True,
-        related_name='atribuicoes', verbose_name='módulo',
-    )
-
-    class Meta:
-        verbose_name = 'atribuição de professor'
-        verbose_name_plural = 'atribuições de professores'
-        constraints = [
-            # Exatamente um entre disciplina e módulo deve estar preenchido.
             models.CheckConstraint(
-                name='atribuicao_disciplina_xor_modulo',
+                name='turma_curso_xor_graduacao',
                 condition=(
-                    models.Q(disciplina__isnull=False, modulo__isnull=True)
-                    | models.Q(disciplina__isnull=True, modulo__isnull=False)
+                    models.Q(curso__isnull=False, graduacao__isnull=True)
+                    | models.Q(curso__isnull=True, graduacao__isnull=False)
                 ),
             ),
         ]
 
     def __str__(self):
-        alvo = self.disciplina or self.modulo
-        return f'{self.professor} → {alvo} ({self.turma})'
+        return f'{self.produto} — {self.codigo}'
+
+    # ------------------------------------------------------------------ tipo
+    @property
+    def is_graduacao(self):
+        return self.graduacao_id is not None
+
+    @property
+    def produto(self):
+        return self.graduacao if self.is_graduacao else self.curso
+
+    # ------------------------------------------------------- datas derivadas
+    def _componentes(self):
+        """Turmas de curso que formam esta turma (ela mesma, se for de curso)."""
+        if not self.is_graduacao:
+            return [self]
+        return list(self.turmas_curso.all())
+
+    @property
+    def inicio(self):
+        datas = [t.data_inicio for t in self._componentes() if t.data_inicio]
+        return min(datas) if datas else None
+
+    @property
+    def fim(self):
+        datas = [t.data_fim for t in self._componentes() if t.data_fim]
+        return max(datas) if datas else None
+
+    def turmas_curso_restantes(self, hoje=None):
+        """Turmas de curso ainda não encerradas — onde a matrícula ocupa vaga."""
+        hoje = hoje or timezone.localdate()
+        return [t for t in self._componentes() if t.data_fim and t.data_fim >= hoje]
+
+    # ----------------------------------------------------------------- vagas
+    def vagas_ocupadas(self, agora=None):
+        """Vagas desta turma de curso ocupadas por matrículas confirmadas ou
+        reservas de pagamento ainda válidas."""
+        from matriculas.models import Vaga
+        return Vaga.objects.ocupando(agora).filter(turma=self).count()
+
+    def vagas_disponiveis(self, agora=None):
+        agora = agora or timezone.now()
+        if not self.is_graduacao:
+            return max((self.vagas or 0) - self.vagas_ocupadas(agora), 0)
+        restantes = self.turmas_curso_restantes(timezone.localdate(agora))
+        if not restantes:
+            return 0
+        return min(t.vagas_disponiveis(agora) for t in restantes)
+
+    # ------------------------------------------------------- disponibilidade
+    def grade_completa(self):
+        """Turma de graduação: tem exatamente uma turma de curso por curso da grade."""
+        if not self.is_graduacao:
+            return True
+        cursos_grade = set(self.graduacao.cursos().values_list('id', flat=True))
+        cursos_turmas = [t.curso_id for t in self.turmas_curso.all()]
+        return bool(cursos_grade) and sorted(cursos_turmas) == sorted(cursos_grade)
+
+    def dentro_do_prazo(self, hoje=None):
+        """Curso: até o dia de início. Graduação: até a última turma de curso começar."""
+        hoje = hoje or timezone.localdate()
+        inicios = [t.data_inicio for t in self._componentes() if t.data_inicio]
+        return bool(inicios) and hoje <= max(inicios)
+
+    def disponivel(self, agora=None):
+        """Pode ser exibida e vendida no site agora?"""
+        agora = agora or timezone.now()
+        return (
+            self.status == self.Status.PUBLICADA
+            and self.produto.publicado
+            and self.grade_completa()
+            and self.dentro_do_prazo(timezone.localdate(agora))
+            and self.vagas_disponiveis(agora) > 0
+        )
+
+    # ------------------------------------------------------------- validação
+    def clean(self):
+        if bool(self.curso_id) == bool(self.graduacao_id):
+            raise ValidationError('Vincule a turma a exatamente um: Curso OU Graduação.')
+        if self.curso_id:
+            erros = {}
+            if not self.data_inicio:
+                erros['data_inicio'] = 'Obrigatória para turma de curso.'
+            if not self.data_fim:
+                erros['data_fim'] = 'Obrigatória para turma de curso.'
+            if self.vagas is None:
+                erros['vagas'] = 'Obrigatório para turma de curso.'
+            if erros:
+                raise ValidationError(erros)
+            if self.data_fim < self.data_inicio:
+                raise ValidationError({'data_fim': 'A data de fim não pode ser anterior ao início.'})
+        else:
+            sobra = [
+                campo for campo in ('data_inicio', 'data_fim', 'vagas')
+                if getattr(self, campo) is not None
+            ]
+            if sobra:
+                raise ValidationError(
+                    'Turma de graduação não tem datas nem vagas próprias: '
+                    'elas vêm das turmas de curso que a compõem.'
+                )
+
+
+class HorarioAula(models.Model):
+    """Dia e horário em que a turma de curso tem aula (presencial, na sede)."""
+
+    class DiaSemana(models.IntegerChoices):  # inteiro para ordenar seg → dom
+        SEG = 1, 'Segunda-feira'
+        TER = 2, 'Terça-feira'
+        QUA = 3, 'Quarta-feira'
+        QUI = 4, 'Quinta-feira'
+        SEX = 5, 'Sexta-feira'
+        SAB = 6, 'Sábado'
+        DOM = 7, 'Domingo'
+
+    turma = models.ForeignKey(
+        Turma, on_delete=models.CASCADE, related_name='horarios', verbose_name='turma'
+    )
+    dia_semana = models.PositiveSmallIntegerField('dia da semana', choices=DiaSemana.choices)
+    hora_inicio = models.TimeField('início')
+    hora_fim = models.TimeField('fim')
+
+    class Meta:
+        verbose_name = 'horário de aula'
+        verbose_name_plural = 'horários de aula'
+        ordering = ['turma', 'dia_semana', 'hora_inicio']
+
+    def __str__(self):
+        return f'{self.get_dia_semana_display()} {self.hora_inicio:%H:%M}–{self.hora_fim:%H:%M}'
 
     def clean(self):
-        if bool(self.disciplina_id) == bool(self.modulo_id):
-            raise ValidationError(
-                'Preencha exatamente um entre Disciplina (Graduação) e Módulo (Formação).'
-            )
-        if self.disciplina_id and self.turma_id and self.disciplina.curso_id != self.turma.curso_id:
-            raise ValidationError({'disciplina': 'A disciplina deve ser do mesmo curso da turma.'})
-        if self.modulo_id and self.turma_id and self.modulo.curso_id != self.turma.curso_id:
-            raise ValidationError({'modulo': 'O módulo deve pertencer ao mesmo curso da turma.'})
+        if self.hora_inicio and self.hora_fim and self.hora_fim <= self.hora_inicio:
+            raise ValidationError({'hora_fim': 'O fim deve ser depois do início.'})
+
+
+# Proxies: duas telas no Admin, cada uma só com os campos do seu tipo.
+class TurmaCursoManager(models.Manager):
+    def get_queryset(self):
+        return super().get_queryset().filter(curso__isnull=False)
+
+
+class TurmaGraduacaoManager(models.Manager):
+    def get_queryset(self):
+        return super().get_queryset().filter(graduacao__isnull=False)
+
+
+class TurmaCurso(Turma):
+    objects = TurmaCursoManager()
+
+    class Meta:
+        proxy = True
+        verbose_name = 'turma de curso'
+        verbose_name_plural = 'turmas de curso'
+
+
+class TurmaGraduacao(Turma):
+    objects = TurmaGraduacaoManager()
+
+    class Meta:
+        proxy = True
+        verbose_name = 'turma de graduação'
+        verbose_name_plural = 'turmas de graduação'

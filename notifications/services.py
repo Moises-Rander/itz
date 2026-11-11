@@ -3,7 +3,7 @@
 Todas as apps enviam email por aqui: informam o tipo, o destinatário e um
 contexto. O serviço renderiza os templates HTML + texto, monta o assunto e
 envia. Falhas são logadas e NÃO propagam — email nunca deve interromper um
-fluxo crítico (ex.: aprovação de matrícula).
+fluxo crítico (ex.: confirmação de matrícula).
 """
 import logging
 
@@ -45,7 +45,7 @@ def enviar_notificacao(tipo, destinatario, contexto=None):
         corpo_txt = render_to_string(f'notifications/{template}.txt', ctx)
         corpo_html = render_to_string(f'notifications/{template}.html', ctx)
         msg = EmailMultiAlternatives(
-            subject=subject,
+            subject=f'{subject} — {settings.INSTITUICAO_NOME}',
             body=corpo_txt,
             from_email=settings.DEFAULT_FROM_EMAIL,
             to=destinatarios,

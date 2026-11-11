@@ -1,28 +1,6 @@
-from django.utils.text import Truncator
 from rest_framework import serializers
 
-from .models import ConteudoInstitucional, Depoimento, MembroEquipe, Post
-
-
-class PostListSerializer(serializers.ModelSerializer):
-    resumo = serializers.SerializerMethodField()
-
-    class Meta:
-        model = Post
-        fields = (
-            'id', 'titulo', 'slug', 'categoria', 'imagem', 'resumo', 'data_publicacao',
-        )
-
-    def get_resumo(self, obj):
-        return Truncator(obj.conteudo or '').chars(200)
-
-
-class PostDetailSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Post
-        fields = (
-            'id', 'titulo', 'slug', 'conteudo', 'imagem', 'categoria', 'data_publicacao',
-        )
+from .models import ConteudoInstitucional, Depoimento, MembroEquipe
 
 
 class ConteudoInstitucionalSerializer(serializers.ModelSerializer):

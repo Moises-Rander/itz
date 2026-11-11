@@ -44,7 +44,7 @@ export default function Contato() {
               </h3>
               <div className="overflow-hidden rounded-2xl border">
                 <iframe
-                  title="Mapa da FTZ"
+                  title="Mapa do ITZ"
                   src={mapaSrc}
                   className="h-64 w-full"
                   loading="lazy"

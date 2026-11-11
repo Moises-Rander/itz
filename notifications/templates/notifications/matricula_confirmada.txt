@@ -1,0 +1,10 @@
+{% extends 'notifications/base.txt' %}
+{% block conteudo %}Olá, {{ nome }}! Recebemos o seu pagamento e a sua matrícula está CONFIRMADA.
+
+{% include 'notifications/_turma.txt' %}
+
+Pagamento: {{ metodo }}{% if parcelas > 1 %} em {{ parcelas }}x de R$ {{ valor_parcela }}{% endif %} — total R$ {{ valor_total }}.
+
+Guarde este email como comprovante. Qualquer dúvida, fale com a secretaria pelos contatos abaixo.
+Seja muito bem-vindo(a)!
+{% endblock %}

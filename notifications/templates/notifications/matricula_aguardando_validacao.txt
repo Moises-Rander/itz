@@ -1,9 +1,0 @@
-{% extends 'notifications/base.txt' %}
-{% block conteudo %}Matrícula aguardando validação.
-
-Candidato: {{ candidato_nome }}
-Curso: {{ curso }}
-Turma: {{ turma }}
-
-Abrir no Admin: {{ admin_url }}
-{% endblock %}

@@ -1,8 +1,0 @@
-{% extends 'notifications/base.txt' %}
-{% block conteudo %}Olá, {{ nome }}!
-
-Sua matrícula foi APROVADA e sua conta no Portal FTZ foi criada.
-Defina sua senha pelo link abaixo (válido por 24 horas):
-
-{{ link }}
-{% endblock %}

@@ -1,171 +1,103 @@
-from django.http import FileResponse
 from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework.exceptions import NotFound, PermissionDenied
-from rest_framework.generics import ListAPIView, RetrieveAPIView
-from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
-from accounts.models import User
-from accounts.permissions import IsAdmin, IsAluno, IsOwnerAluno
+from cursos.models import Turma
 
-from .models import Documento, Matricula
-from .serializers import (
-    DocumentoSerializer,
-    MatriculaAdminSerializer,
-    MatriculaAlunoDetailSerializer,
-    MatriculaAlunoListSerializer,
-    MatriculaCreateSerializer,
-    MatriculaStatusSerializer,
-)
+from .models import Matricula
+from .serializers import CheckoutSerializer, MatriculaStatusSerializer, SimularPrecoSerializer
 from .services import (
+    PagamentoIndisponivel,
+    atualizar_status,
+    calcular_preco,
     iniciar_matricula,
-    matricula_por_token,
+    opcoes_parcelamento,
     processar_webhook,
-    registrar_documentos,
+    resolver_cupom,
     webhook_autentico,
 )
 
 
-class MatriculasView(APIView):
-    """POST público (inicia matrícula) e GET do aluno (lista as próprias)."""
-
-    def get_permissions(self):
-        if self.request.method == 'POST':
-            return [AllowAny()]
-        return [IsAuthenticated(), IsAluno()]
-
-    def post(self, request):
-        serializer = MatriculaCreateSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        _matricula, info = iniciar_matricula(**serializer.validated_data)
-        return Response(info, status=status.HTTP_201_CREATED)
-
-    def get(self, request):
-        qs = (
-            Matricula.objects
-            .filter(aluno__user=request.user)
-            .select_related('turma__curso')
-        )
-        return Response(MatriculaAlunoListSerializer(qs, many=True).data)
+def ip_cliente(request):
+    """IP do aluno (exigido pelo Asaas). Mesma regra do limitador de tentativas:
+    respeita ``NUM_PROXIES``, então um X-Forwarded-For forjado não engana."""
+    return ScopedRateThrottle().get_ident(request)
 
 
-class MatriculaAlunoDetailView(RetrieveAPIView):
-    """Detalhe de uma matrícula do próprio aluno."""
-
-    permission_classes = (IsAuthenticated, IsOwnerAluno)
-    serializer_class = MatriculaAlunoDetailSerializer
-    queryset = Matricula.objects.select_related('turma__curso').all()
-
-
-class DocumentosUploadView(APIView):
-    """Upload de documentos via token (sem autenticação)."""
+class SimularPrecoView(APIView):
+    """Preço final e opções de parcelamento (com cupom, se informado)."""
 
     permission_classes = (AllowAny,)
+    throttle_classes = (ScopedRateThrottle,)
+    throttle_scope = 'simular'
 
     def post(self, request):
-        token = request.data.get('token')
-        tipos_validos = {c.value for c in Documento.Tipo}
-        arquivos = {
-            tipo: arquivo for tipo, arquivo in request.FILES.items()
-            if tipo in tipos_validos
-        }
-        if not arquivos:
-            return Response(
-                {'detail': 'Envie ao menos um arquivo (RG, CPF ou HISTORICO_EM).'},
-                status=status.HTTP_400_BAD_REQUEST,
+        s = SimularPrecoSerializer(data=request.data)
+        s.is_valid(raise_exception=True)
+        turma = Turma.objects.filter(pk=s.validated_data['turma']).first()
+        if turma is None or not turma.disponivel():
+            raise NotFound('Turma indisponível.')
+        cupom = resolver_cupom(s.validated_data['codigo_cupom'], turma)
+        p = calcular_preco(turma, cupom)
+        return Response({
+            'valor_original': p['valor_original'],
+            'desconto_promocao': p['desconto_promocao'],
+            'promocao': p['promocao'].nome if p['promocao'] else None,
+            'desconto_cupom': p['desconto_cupom'],
+            'cupom': cupom.codigo if cupom else None,
+            'valor_a_vista': p['valor_a_vista'],
+            'parcelamento': opcoes_parcelamento(p['valor_a_vista']),
+        })
+
+
+class CheckoutView(APIView):
+    """Inicia a matrícula e o pagamento (PIX ou cartão)."""
+
+    permission_classes = (AllowAny,)
+    throttle_classes = (ScopedRateThrottle,)
+    throttle_scope = 'checkout'  # freia testes de cartão em massa
+
+    def post(self, request):
+        s = CheckoutSerializer(data=request.data)
+        s.is_valid(raise_exception=True)
+        d = s.validated_data
+        try:
+            matricula = iniciar_matricula(
+                turma_id=d['turma'], aluno=dict(d['aluno']), metodo=d['metodo'],
+                parcelas=d['parcelas'], codigo_cupom=d['codigo_cupom'],
+                cartao=d.get('cartao'), endereco=d.get('endereco'), ip=ip_cliente(request),
             )
-        _matricula, docs = registrar_documentos(token, arquivos)
-        return Response(
-            DocumentoSerializer(docs, many=True, context={'request': request}).data,
-            status=status.HTTP_201_CREATED,
-        )
+        except Turma.DoesNotExist:
+            raise NotFound('Turma não encontrada.') from None
+        except PagamentoIndisponivel:
+            return Response(
+                {'detail': 'O sistema de pagamento não respondeu. Nenhum valor foi cobrado; '
+                           'tente novamente em instantes.'},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        return Response(MatriculaStatusSerializer(matricula).data, status=status.HTTP_201_CREATED)
 
 
 class MatriculaStatusView(APIView):
-    """Consulta pública de status via token de upload."""
+    """Consultado pela página enquanto o PIX não é pago."""
 
     permission_classes = (AllowAny,)
 
-    def get(self, request):
-        token = request.query_params.get('token')
-        matricula = matricula_por_token(token)
-        if matricula is None:
-            raise NotFound('Matrícula não encontrada para este token.')
-        return Response(
-            MatriculaStatusSerializer(matricula, context={'request': request}).data
+    def get(self, request, token):
+        matricula = get_object_or_404(
+            Matricula.objects.select_related('turma', 'aluno'), token=token
         )
+        return Response(MatriculaStatusSerializer(atualizar_status(matricula)).data)
 
 
 class AsaasWebhookView(APIView):
-    """Recebe notificações do Asaas. Verifica autenticidade antes de processar."""
-
     permission_classes = (AllowAny,)
 
     def post(self, request):
         if not webhook_autentico(request.headers):
             raise PermissionDenied('Webhook não autenticado.')
-        resultado = processar_webhook(request.data)
-        return Response(resultado, status=status.HTTP_200_OK)
-
-
-class AdminMatriculaListView(ListAPIView):
-    """Lista todas as matrículas (Admin), com filtros por status/turma/curso."""
-
-    permission_classes = (IsAdmin,)
-    serializer_class = MatriculaAdminSerializer
-
-    def get_queryset(self):
-        qs = Matricula.objects.select_related(
-            'turma__curso', 'aluno__user'
-        ).prefetch_related('documentos')
-        p = self.request.query_params
-        if p.get('status'):
-            qs = qs.filter(status=p['status'])
-        if p.get('turma'):
-            qs = qs.filter(turma_id=p['turma'])
-        if p.get('curso'):
-            qs = qs.filter(turma__curso_id=p['curso'])
-        return qs
-
-
-class AdminMatriculaDetailView(RetrieveAPIView):
-    """Detalhe completo de uma matrícula (Admin), com documentos."""
-
-    permission_classes = (IsAdmin,)
-    serializer_class = MatriculaAdminSerializer
-    queryset = Matricula.objects.select_related(
-        'turma__curso', 'aluno__user'
-    ).prefetch_related('documentos').all()
-
-
-class DocumentoDownloadView(APIView):
-    """Download seguro de documento sensível (RG/CPF/histórico).
-
-    Acesso restrito ao Admin ou ao próprio aluno dono da matrícula — os arquivos
-    nunca são expostos por URL pública (conformidade LGPD).
-    """
-
-    permission_classes = (IsAuthenticated,)
-
-    def get(self, request, pk):
-        documento = get_object_or_404(
-            Documento.objects.select_related('matricula__aluno'), pk=pk
-        )
-        user = request.user
-        is_admin = user.is_superuser or user.role == User.Role.ADMIN
-        aluno = getattr(user, 'aluno', None)
-        is_dono = (
-            user.role == User.Role.ALUNO
-            and aluno is not None
-            and documento.matricula.aluno_id == aluno.id
-        )
-        if not (is_admin or is_dono):
-            raise PermissionDenied('Você não tem acesso a este documento.')
-
-        return FileResponse(
-            documento.arquivo.open('rb'),
-            as_attachment=True,
-            filename=f'{documento.tipo.lower()}-{documento.id}',
-        )
+        return Response(processar_webhook(request.data))

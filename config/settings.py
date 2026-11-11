@@ -11,7 +11,6 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 """
 
 import os
-from datetime import timedelta
 from pathlib import Path
 
 import dj_database_url
@@ -58,14 +57,10 @@ INSTALLED_APPS = [
     # Terceiros
     'corsheaders',
     'rest_framework',
-    'rest_framework_simplejwt',
-    'rest_framework_simplejwt.token_blacklist',
-    # FTZ apps
+    # ITZ apps
     'accounts',
     'cursos',
     'matriculas',
-    'vestibular',
-    'academico',
     'cms',
     'notifications',
 ]
@@ -153,22 +148,18 @@ USE_TZ = True
 STATIC_URL = 'static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 
-# Media files (uploads: fotos, documentos, PDFs de resultado, etc.)
+# Media files (imagens enviadas pelo Admin: cursos, professores, institucional)
 MEDIA_URL = 'media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
 # --- Armazenamento de arquivos ---
-# USE_S3=True → mídia em bucket S3-compatível (ex.: Cloudflare R2). As imagens
-# ficam públicas; documentos sensíveis (RG/CPF/histórico) usam storage privado
-# e são servidos apenas pela view autenticada de download.
+# USE_S3=True → mídia (imagens públicas) em bucket S3-compatível (ex.: Cloudflare R2).
 USE_S3 = env_bool('USE_S3', 'False')
 
 if USE_S3:
     AWS_ACCESS_KEY_ID = os.environ.get('AWS_ACCESS_KEY_ID', '')
     AWS_SECRET_ACCESS_KEY = os.environ.get('AWS_SECRET_ACCESS_KEY', '')
     AWS_STORAGE_BUCKET_NAME = os.environ.get('AWS_STORAGE_BUCKET_NAME', '')
-    # Bucket privado dedicado aos documentos sensíveis (RG/CPF/histórico).
-    AWS_PRIVATE_BUCKET_NAME = os.environ.get('AWS_PRIVATE_BUCKET_NAME', '')
     AWS_S3_ENDPOINT_URL = os.environ.get('AWS_S3_ENDPOINT_URL', '') or None
     AWS_S3_REGION_NAME = os.environ.get('AWS_S3_REGION_NAME', 'auto')
     AWS_S3_CUSTOM_DOMAIN = os.environ.get('AWS_S3_CUSTOM_DOMAIN', '') or None
@@ -204,7 +195,7 @@ CSRF_TRUSTED_ORIGINS = [
     o for o in os.environ.get('CSRF_TRUSTED_ORIGINS', '').split(',') if o
 ]
 
-# O Render injeta o host público do serviço (ex.: ftz-api.onrender.com).
+# O Render injeta o host público do serviço (ex.: itz-api.onrender.com).
 # Libera-o automaticamente para funcionar também na URL temporária, sem precisar
 # esperar o domínio próprio ficar ativo.
 _render_host = os.environ.get('RENDER_EXTERNAL_HOSTNAME')
@@ -212,40 +203,28 @@ if _render_host:
     ALLOWED_HOSTS.append(_render_host)
     CSRF_TRUSTED_ORIGINS.append(f'https://{_render_host}')
 
-# Django REST Framework — autenticação por JWT, exige login por padrão,
-# com rate limiting (anti brute-force) nos endpoints sensíveis.
+# Django REST Framework — a API é só pública (site + matrícula); não há login
+# pela API. Cada view libera o acesso explicitamente com AllowAny; o padrão
+# nega tudo, para que uma view nova não fique aberta por engano.
 REST_FRAMEWORK = {
-    'DEFAULT_AUTHENTICATION_CLASSES': (
-        'rest_framework_simplejwt.authentication.JWTAuthentication',
-    ),
+    'DEFAULT_AUTHENTICATION_CLASSES': (),
     'DEFAULT_PERMISSION_CLASSES': (
         'rest_framework.permissions.IsAuthenticated',
     ),
-    'DEFAULT_THROTTLE_CLASSES': (
-        'rest_framework.throttling.ScopedRateThrottle',
-    ),
+    'UNAUTHENTICATED_USER': None,
+    # Limite de tentativas por IP (o checkout aceita cartão: freia testes de
+    # cartões roubados em massa).
     'DEFAULT_THROTTLE_RATES': {
-        'login': os.environ.get('THROTTLE_LOGIN', '10/min'),
-        'password_reset': os.environ.get('THROTTLE_PASSWORD_RESET', '5/min'),
+        'checkout': os.environ.get('THROTTLE_CHECKOUT', '10/hour'),
+        'simular': os.environ.get('THROTTLE_SIMULAR', '60/min'),
     },
+    # Quantos proxies a hospedagem coloca na frente do Django (para achar o IP real).
+    'NUM_PROXIES': int(os.environ['NUM_PROXIES']) if os.environ.get('NUM_PROXIES') else None,
 }
-
-# SimpleJWT — access curto, refresh longo, blacklist no logout
-SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=15),
-    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
-    'ROTATE_REFRESH_TOKENS': True,
-    'BLACKLIST_AFTER_ROTATION': True,
-    'UPDATE_LAST_LOGIN': True,
-}
-
-# Recuperação de senha: token válido por 24 horas
-PASSWORD_RESET_TIMEOUT = 60 * 60 * 24
 
 # URLs base usadas para montar os links enviados por email
-FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:3000')
+FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:5173')
 BACKEND_URL = os.environ.get('BACKEND_URL', 'http://localhost:8000')
-PASSWORD_RESET_PATH = '/redefinir-senha'  # front: /redefinir-senha?uid=..&token=..
 
 # --- Email / SMTP (tudo via variáveis de ambiente; nada sensível hardcoded) ---
 # Em dev, EMAIL_BACKEND padrão é o console; em produção, defina o backend SMTP.
@@ -258,16 +237,18 @@ EMAIL_HOST_USER = os.environ.get('EMAIL_HOST_USER', '')
 EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', '')
 EMAIL_USE_TLS = env_bool('EMAIL_USE_TLS', 'True')
 DEFAULT_FROM_EMAIL = os.environ.get(
-    'DEFAULT_FROM_EMAIL', 'Faculdade de Teologia Zait <zenaldooliveira67@gmail.com>'
+    'DEFAULT_FROM_EMAIL', 'Instituto de Teologia Zait <zenaldooliveira67@gmail.com>'
 )
 # Endereço do Admin que recebe notificações internas (nunca outros usuários).
-ADMIN_EMAIL = os.environ.get('ADMIN_EMAIL', 'secretaria@ftz.edu.br')
+ADMIN_EMAIL = os.environ.get('ADMIN_EMAIL', 'secretaria@itz.edu.br')
+# Reitor: recebe um email com os dados do aluno a cada nova matrícula.
+REITOR_EMAIL = os.environ.get('REITOR_EMAIL') or ADMIN_EMAIL
 
 # Dados institucionais exibidos nos templates de email
-INSTITUICAO_NOME = os.environ.get('FTZ_NOME', 'Faculdade de Teologia Zait')
-INSTITUICAO_CONTATO_EMAIL = os.environ.get('FTZ_CONTATO_EMAIL', 'zenaldooliveira67@gmail.com')
-INSTITUICAO_CONTATO_TELEFONE = os.environ.get('FTZ_CONTATO_TELEFONE', '(98) 98833-9224')
-INSTITUICAO_LOGO_URL = os.environ.get('FTZ_LOGO_URL', '')
+INSTITUICAO_NOME = os.environ.get('INSTITUICAO_NOME', 'Instituto de Teologia Zait')
+INSTITUICAO_CONTATO_EMAIL = os.environ.get('INSTITUICAO_CONTATO_EMAIL', 'zenaldooliveira67@gmail.com')
+INSTITUICAO_CONTATO_TELEFONE = os.environ.get('INSTITUICAO_CONTATO_TELEFONE', '(98) 98833-9224')
+INSTITUICAO_LOGO_URL = os.environ.get('INSTITUICAO_LOGO_URL', '')
 
 # Integração Asaas (gateway de pagamento)
 # ASAAS_FAKE=True usa um cliente simulado (sem rede) para dev/testes.
@@ -276,6 +257,17 @@ ASAAS_API_KEY = os.environ.get('ASAAS_API_KEY', '')
 ASAAS_BASE_URL = os.environ.get('ASAAS_BASE_URL', 'https://sandbox.asaas.com/api/v3')
 # Token validado no header do webhook (Asaas envia em 'asaas-access-token').
 ASAAS_WEBHOOK_TOKEN = os.environ.get('ASAAS_WEBHOOK_TOKEN', 'troque-este-token-do-webhook')
+
+# --- Regras da matrícula ---
+# Parcelamento no cartão: até MAX_PARCELAS; o acréscimo de cada opção é
+# cadastrado no Admin (Taxas de parcelamento) e repassado ao aluno.
+MAX_PARCELAS = int(os.environ.get('MAX_PARCELAS', '12'))
+# Tempo em que a vaga fica reservada aguardando o pagamento (validade do PIX).
+RESERVA_MINUTOS = int(os.environ.get('RESERVA_MINUTOS', '30'))
+# Endereço da sede (aulas presenciais) — exibido no site e nos emails.
+SEDE_ENDERECO = os.environ.get(
+    'SEDE_ENDERECO', 'Rua Transjordânia, 235 - Recanto Vinhais, São Luís - MA, 65070-616'
+)
 
 
 # --- Segurança HTTPS (aplicada apenas em produção, quando DEBUG=False) ---
@@ -303,6 +295,8 @@ if SENTRY_DSN:
         environment=os.environ.get('SENTRY_ENV', 'production'),
         traces_sample_rate=float(os.environ.get('SENTRY_TRACES_RATE', '0')),
         send_default_pii=False,  # não enviar dados pessoais (LGPD)
+        # Nunca enviar o corpo das requisições: o checkout recebe dados de cartão.
+        max_request_body_size='never',
     )
 
 

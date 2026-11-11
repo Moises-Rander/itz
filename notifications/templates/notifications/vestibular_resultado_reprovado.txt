@@ -1,7 +1,0 @@
-{% extends 'notifications/base.txt' %}
-{% block conteudo %}Olá, {{ nome }}.
-
-O resultado do vestibular de {{ turma }} foi divulgado e, desta vez, você não foi aprovado(a).
-
-Agradecemos a sua participação. Não desanime — será um prazer contar com você nas próximas edições!
-{% endblock %}

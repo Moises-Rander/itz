@@ -1,15 +1,15 @@
-# Deploy da FTZ — Render (backend) + Vercel (frontend)
+# Deploy do ITZ — Render (backend) + Vercel (frontend)
 
-Guia passo a passo para colocar o sistema no ar em `ftzait.com.br`
+Guia passo a passo para colocar o sistema no ar em `itzait.com.br`
 (troque pelo domínio escolhido — tudo é por variável de ambiente).
 
 Arquitetura:
 
 ```
-ftzait.com.br        → Frontend (Vercel, estático)
-api.ftzait.com.br    → Backend Django + gunicorn (Render)
+itzait.com.br        → Frontend (Vercel, estático)
+api.itzait.com.br    → Backend Django + gunicorn (Render)
                         ├── PostgreSQL (Render)
-                        ├── Mídia → Cloudflare R2 (S3) — imagens públicas, documentos privados
+                        ├── Mídia → Cloudflare R2 (S3) — imagens públicas
                         ├── Email → Resend/SES (SMTP)
                         └── Asaas (produção) → webhook em /api/webhooks/asaas/
 ```
@@ -24,51 +24,47 @@ api.ftzait.com.br    → Backend Django + gunicorn (Render)
 
 ## Passo 0 — Subir o código no GitHub
 ```bash
-cd /Users/moises/ftz
+cd /Users/moises/itz
 git init
 git add .
-git commit -m "FTZ: sistema completo (backend + frontend)"
+git commit -m "ITZ: sistema completo (backend + frontend)"
 # crie um repositório vazio no GitHub e:
-git remote add origin git@github.com:SEU_USUARIO/ftz.git
+git remote add origin git@github.com:SEU_USUARIO/itz.git
 git branch -M main
 git push -u origin main
 ```
 Confirme que `.env`, `db.sqlite3`, `venv/`, `media/`, `staticfiles/`, `frontend/node_modules/` e `frontend/.env` **não** foram commitados.
 
 ## Passo 1 — Comprar o domínio
-- **[registro.br](https://registro.br)** → registre `ftzait.com.br` (~R$40/ano).
+- **[registro.br](https://registro.br)** → registre `itzait.com.br` (~R$40/ano).
 - Recomendado: mover o DNS para o **Cloudflare** (grátis) — facilita subdomínios e CDN.
   No Cloudflare: *Add site* → siga a troca de nameservers no registro.br.
 
-## Passo 2 — Storage de mídia (Cloudflare R2) — DOIS buckets
-Documentos sensíveis (RG/CPF/histórico) e imagens públicas **não podem** ficar no
-mesmo bucket, porque publicar um bucket (custom domain / public URL) torna TODO
-o conteúdo público. Por isso usamos dois buckets:
+## Passo 2 — Storage de mídia (Cloudflare R2)
+Só há imagens públicas (cursos, professores, institucional) — um bucket basta.
 
-1. Cloudflare → **Storage & databases → R2** → *Create bucket*:
-   - `ftz-media` → **imagens públicas**.
-   - `ftz-docs`  → **documentos privados** (NÃO habilite acesso público neste!).
-2. Tornar público **apenas** o `ftz-media`:
-   - `ftz-media → Settings → Custom Domains → Add` → `cdn.ftzait.com.br` (requer o domínio no Cloudflare), **ou** `Public Development URL → Enable` (dá uma URL `pub-xxxx.r2.dev` para começar/testar).
+1. Cloudflare → **Storage & databases → R2** → *Create bucket* `itz-media`.
+2. Tornar o bucket público:
+   - `itz-media → Settings → Custom Domains → Add` → `cdn.itzait.com.br` (requer o domínio no Cloudflare), **ou** `Public Development URL → Enable` (dá uma URL `pub-xxxx.r2.dev` para começar/testar).
    - O domínio/URL público resultante vira `AWS_S3_CUSTOM_DOMAIN`.
-3. Credenciais: **R2 → Overview → `{ } API` → Manage API Tokens → Create** com permissão *Object Read & Write* (aplicada aos dois buckets). Anote `Access Key ID`, `Secret Access Key` e o **Endpoint S3** (`https://<ACCOUNT_ID>.r2.cloudflarestorage.com`).
-   - Variáveis: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_STORAGE_BUCKET_NAME=ftz-media`, `AWS_PRIVATE_BUCKET_NAME=ftz-docs`, `AWS_S3_ENDPOINT_URL=...`, `AWS_S3_CUSTOM_DOMAIN=cdn.ftzait.com.br` (ou a URL `pub-xxxx.r2.dev`).
+3. Credenciais: **R2 → Overview → `{ } API` → Manage API Tokens → Create** com permissão *Object Read & Write* (aplicada ao bucket). Anote `Access Key ID`, `Secret Access Key` e o **Endpoint S3** (`https://<ACCOUNT_ID>.r2.cloudflarestorage.com`).
+   - Variáveis: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_STORAGE_BUCKET_NAME=itz-media`, `AWS_S3_ENDPOINT_URL=...`, `AWS_S3_CUSTOM_DOMAIN=cdn.itzait.com.br` (ou a URL `pub-xxxx.r2.dev`).
 
 ## Passo 3 — Email (Resend)
-1. [resend.com](https://resend.com) → *Add Domain* `ftzait.com.br` → adicione os registros **SPF/DKIM** no DNS (Cloudflare). Sem isso os emails caem no spam.
+1. [resend.com](https://resend.com) → *Add Domain* `itzait.com.br` → adicione os registros **SPF/DKIM** no DNS (Cloudflare). Sem isso os emails caem no spam.
 2. Crie uma API key e obtenha as credenciais **SMTP** (host `smtp.resend.com`, porta `587`, user `resend`, senha = a API key).
 
 ## Passo 4 — Backend no Render (Blueprint)
-1. Render → **New → Blueprint** → conecte o repo. O `render.yaml` cria o **Web Service** `ftz-api` + o **Postgres** `ftz-db`.
-2. Em **ftz-api → Environment**, preencha as variáveis marcadas `sync:false`:
-   - Email: `EMAIL_HOST=smtp.resend.com`, `EMAIL_HOST_USER=resend`, `EMAIL_HOST_PASSWORD=<api key>`.
+1. Render → **New → Blueprint** → conecte o repo. O `render.yaml` cria o **Web Service** `itz-api` + o **Postgres** `itz-db`.
+2. Em **itz-api → Environment**, preencha as variáveis marcadas `sync:false`:
+   - Email: `EMAIL_HOST=smtp.resend.com`, `EMAIL_HOST_USER=resend`, `EMAIL_HOST_PASSWORD=<api key>`, `REITOR_EMAIL=<email do reitor>` (recebe os dados de cada nova matrícula).
    - Asaas: `ASAAS_API_KEY=<chave de produção>`, `ASAAS_WEBHOOK_TOKEN=<gere um token forte>`.
    - R2: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_STORAGE_BUCKET_NAME`, `AWS_S3_ENDPOINT_URL`, `AWS_S3_CUSTOM_DOMAIN`.
    - (opcional) `SENTRY_DSN`.
-   - Confira que `DEBUG=False`, `ALLOWED_HOSTS=api.ftzait.com.br`, `USE_S3=True` e as URLs de front/back estão certas.
+   - Confira que `DEBUG=False`, `ALLOWED_HOSTS=api.itzait.com.br`, `USE_S3=True` e as URLs de front/back estão certas.
 3. O deploy roda automaticamente: `collectstatic` + `migrate` (build) e `gunicorn` (start).
-4. **Domínio**: ftz-api → *Settings → Custom Domains* → adicione `api.ftzait.com.br` (Render dá o alvo do CNAME).
-5. **Superusuário**: ftz-api → *Shell* →
+4. **Domínio**: itz-api → *Settings → Custom Domains* → adicione `api.itzait.com.br` (Render dá o alvo do CNAME).
+5. **Superusuário**: itz-api → *Shell* →
    ```bash
    python manage.py createsuperuser
    ```
@@ -76,11 +72,11 @@ o conteúdo público. Por isso usamos dois buckets:
 ## Passo 5 — Frontend no Vercel
 1. Vercel → **Add New → Project** → importe o repo → **Root Directory: `frontend`** (framework Vite, detectado).
 2. **Environment Variables**:
-   - `VITE_API_URL = https://api.ftzait.com.br/api`
+   - `VITE_API_URL = https://api.itzait.com.br/api`
    - `VITE_CONTATO_*`, `VITE_HERO_IMAGEM` etc. (veja `frontend/.env.example`).
    > Vite "assa" essas variáveis no build — se mudar, faça *Redeploy*.
 3. Deploy. O `frontend/vercel.json` garante o fallback de SPA (deep links).
-4. **Domínio**: Vercel → *Settings → Domains* → adicione `ftzait.com.br` e `www.ftzait.com.br`.
+4. **Domínio**: Vercel → *Settings → Domains* → adicione `itzait.com.br` e `www.itzait.com.br`.
 
 ## Passo 6 — DNS (Cloudflare)
 | Tipo  | Nome | Valor |
@@ -94,22 +90,27 @@ HTTPS é emitido automaticamente por Render e Vercel.
 
 ## Passo 7 — Asaas (produção)
 1. Asaas → **Integrações → Webhooks** → *Adicionar*:
-   - URL: `https://api.ftzait.com.br/api/webhooks/asaas/`
+   - URL: `https://api.itzait.com.br/api/webhooks/asaas/`
    - Token de autenticação: **o mesmo** valor de `ASAAS_WEBHOOK_TOKEN`.
    - Eventos: `PAYMENT_CONFIRMED` e `PAYMENT_RECEIVED`.
 2. Teste com um pagamento real de valor baixo (ou primeiro em sandbox com `ASAAS_FAKE`/sandbox key).
 
 ## Passo 8 — Conteúdo inicial (Django Admin)
-Acesse `https://api.ftzait.com.br/admin/` e cadastre:
-- **Cursos**, **Turmas**, **Disciplinas/Módulos**, **Ciclos/Horários**, **Professores** e **Atribuições**.
-- **Conteúdo institucional** (seções `HERO`, `SOBRE`, `MISSAO`, `VISAO`, `VALORES`), **Membros da equipe**, **Depoimentos**, **Posts** — lembre de marcar *publicado/ativo*.
-- **Edições de vestibular**, se aplicável.
+Acesse `https://api.itzait.com.br/admin/` e cadastre:
+1. **Professores** (marque *exibir na home* para os destaques).
+2. **Cursos** (cada disciplina avulsa: ementa, carga horária, imagem).
+3. **Graduações** → módulos (na própria tela) → *editar cursos* de cada módulo.
+4. **Turmas de curso**: datas, vagas, preço, professores e horários. Status *Publicada* para aparecer.
+5. **Turmas de graduação**: escolha uma turma de curso para cada curso da grade e o preço do pacote.
+6. **Taxas de parcelamento** (acréscimo de 2x a 12x repassado ao aluno; sem linha = sem juros).
+7. Opcional: **Promoções** e **Cupons**.
+- **Conteúdo institucional** (seções `HERO`, `SOBRE`, `MISSAO`, `VISAO`, `VALORES`), **Membros da equipe** e **Depoimentos** — lembre de marcar *publicado/ativo*.
 
 ## Passo 9 — Checklist final
-- [ ] `https://ftzait.com.br` abre e consome a API (Home mostra cursos/depoimentos).
+- [ ] `https://itzait.com.br` abre e consome a API (Home mostra cursos/depoimentos).
 - [ ] Login no `/admin/` funciona sob HTTPS (cookies seguros).
-- [ ] Matrícula de teste ponta a ponta (pagamento → webhook → validação → aprovação → email "defina sua senha").
-- [ ] Download de documento só funciona logado como admin/dono (URL pública não expõe o arquivo).
+- [ ] Matrícula de teste com PIX (valor baixo): QR Code → pagamento → página confirma sozinha → emails "matrícula confirmada" (aluno) e "nova matrícula" (reitor).
+- [ ] Matrícula de teste com cartão parcelado; depois *Cancelar e estornar* no Admin e confira o estorno no Asaas.
 - [ ] Emails chegam (não no spam) — SPF/DKIM ok.
 
 ---

@@ -1,3 +1,10 @@
+"""Matrícula: aluno (sem login), pagamento via Asaas e ocupação de vagas.
+
+Fluxo: PENDENTE (reserva de vaga ativa) → CONFIRMADA quando o pagamento cai.
+Sem pagamento dentro do prazo a reserva expira sozinha: a ``Vaga`` deixa de
+contar como ocupada assim que ``reserva_expira_em`` passa — não depende de
+tarefa agendada (o servidor pode estar dormindo).
+"""
 import secrets
 from decimal import Decimal
 
@@ -6,28 +13,13 @@ from django.db import models
 from django.utils import timezone
 
 
-def documento_storage():
-    """Storage privado para documentos sensíveis (RG/CPF/histórico).
-
-    Em S3, usa objetos privados (acesso só via URL assinada / view autenticada);
-    em desenvolvimento, usa o storage local padrão (não servido publicamente
-    fora do DEBUG). Chamável para não fixar o backend nas migrações.
-    """
-    from django.conf import settings
-    if getattr(settings, 'USE_S3', False):
-        from config.storages import PrivateMediaStorage
-        return PrivateMediaStorage()
-    from django.core.files.storage import default_storage
-    return default_storage
-
-
 class TipoDesconto(models.TextChoices):
     PERCENTUAL = 'PERCENTUAL', 'Percentual (%)'
     FIXO = 'FIXO', 'Valor fixo (R$)'
 
 
 def _aplicar_desconto(valor_base, tipo, valor_desconto):
-    """Retorna o valor do desconto (R$) sobre valor_base, sem nunca ultrapassá-lo."""
+    """Valor do desconto (R$) sobre valor_base, sem nunca ultrapassá-lo."""
     valor_base = Decimal(valor_base)
     valor_desconto = Decimal(valor_desconto)
     if tipo == TipoDesconto.PERCENTUAL:
@@ -37,19 +29,56 @@ def _aplicar_desconto(valor_base, tipo, valor_desconto):
     return min(desconto, valor_base).quantize(Decimal('0.01'))
 
 
-class Cupom(models.Model):
+class AlvoDesconto(models.Model):
+    """Restrição opcional de um desconto a uma turma, curso ou graduação."""
+
+    turma = models.ForeignKey(
+        'cursos.Turma', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='+', verbose_name='turma',
+    )
+    curso = models.ForeignKey(
+        'cursos.Curso', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='+', verbose_name='curso',
+    )
+    graduacao = models.ForeignKey(
+        'cursos.Graduacao', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='+', verbose_name='graduação',
+    )
+
+    class Meta:
+        abstract = True
+
+    def _alvos(self):
+        return [a for a in (self.turma_id, self.curso_id, self.graduacao_id) if a]
+
+    def aplica_a(self, turma):
+        if self.turma_id:
+            return self.turma_id == turma.pk
+        if self.curso_id:
+            return self.curso_id == turma.curso_id
+        if self.graduacao_id:
+            return self.graduacao_id == turma.graduacao_id
+        return True  # sem restrição: vale para tudo
+
+    def clean(self):
+        if len(self._alvos()) > 1:
+            raise ValidationError('Restrinja a no máximo um: turma, curso ou graduação.')
+        if getattr(self, 'data_inicio', None) and getattr(self, 'data_fim', None):
+            if self.data_fim < self.data_inicio:
+                raise ValidationError({'data_fim': 'A data de fim não pode ser anterior ao início.'})
+
+
+class Cupom(AlvoDesconto):
     codigo = models.CharField('código', max_length=40, unique=True)
     tipo_desconto = models.CharField('tipo de desconto', max_length=12, choices=TipoDesconto.choices)
     valor_desconto = models.DecimalField('valor do desconto', max_digits=10, decimal_places=2)
     data_inicio = models.DateField('início da validade')
     data_fim = models.DateField('fim da validade')
     max_usos = models.PositiveIntegerField('máximo de usos', default=1)
-    usos_atuais = models.PositiveIntegerField('usos atuais', default=0)
-    is_ativo = models.BooleanField('ativo', default=True)
-    curso = models.ForeignKey(
-        'cursos.Curso', on_delete=models.CASCADE, null=True, blank=True,
-        related_name='cupons', verbose_name='curso (opcional)',
+    usos_atuais = models.PositiveIntegerField(
+        'usos', default=0, help_text='Contado quando a matrícula é confirmada.'
     )
+    is_ativo = models.BooleanField('ativo', default=True)
 
     class Meta:
         verbose_name = 'cupom'
@@ -59,46 +88,29 @@ class Cupom(models.Model):
     def __str__(self):
         return self.codigo
 
-    @property
-    def esgotado(self):
-        return self.usos_atuais >= self.max_usos
-
-    def esta_valido(self, curso=None, em=None):
-        """Impede uso quando vencido, desativado, esgotado ou de outro curso."""
-        hoje = (em or timezone.localdate())
-        if not self.is_ativo or self.esgotado:
-            return False
-        if not (self.data_inicio <= hoje <= self.data_fim):
-            return False
-        if self.curso_id and curso is not None and curso.pk != self.curso_id:
-            return False
-        return True
+    def esta_valido(self, turma, em=None):
+        hoje = em or timezone.localdate()
+        return (
+            self.is_ativo
+            and self.usos_atuais < self.max_usos
+            and self.data_inicio <= hoje <= self.data_fim
+            and self.aplica_a(turma)
+        )
 
     def calcular_desconto(self, valor_base):
         return _aplicar_desconto(valor_base, self.tipo_desconto, self.valor_desconto)
 
-    def clean(self):
-        if self.data_inicio and self.data_fim and self.data_fim < self.data_inicio:
-            raise ValidationError({'data_fim': 'A data de fim não pode ser anterior ao início.'})
 
+class Promocao(AlvoDesconto):
+    """Desconto automático enquanto vigente. A mais específica vence
+    (turma > curso/graduação > geral)."""
 
-class Promocao(models.Model):
-    """Promoção vinculada a uma Turma OU a um Curso. Aplica-se automaticamente
-    enquanto ativa e dentro do período de validade."""
-
+    nome = models.CharField('nome', max_length=120, blank=True, help_text='Ex.: Black Friday')
     tipo_desconto = models.CharField('tipo de desconto', max_length=12, choices=TipoDesconto.choices)
     valor = models.DecimalField('valor do desconto', max_digits=10, decimal_places=2)
     data_inicio = models.DateField('início')
     data_fim = models.DateField('fim')
     is_ativa = models.BooleanField('ativa', default=True)
-    turma = models.ForeignKey(
-        'cursos.Turma', on_delete=models.CASCADE, null=True, blank=True,
-        related_name='promocoes', verbose_name='turma',
-    )
-    curso = models.ForeignKey(
-        'cursos.Curso', on_delete=models.CASCADE, null=True, blank=True,
-        related_name='promocoes', verbose_name='curso',
-    )
 
     class Meta:
         verbose_name = 'promoção'
@@ -106,180 +118,207 @@ class Promocao(models.Model):
         ordering = ['-data_inicio']
 
     def __str__(self):
-        alvo = self.turma or self.curso
-        return f'Promoção {self.get_tipo_desconto_display()} — {alvo}'
-
-    def esta_vigente(self, em=None):
-        hoje = (em or timezone.localdate())
-        return self.is_ativa and self.data_inicio <= hoje <= self.data_fim
+        return self.nome or f'Promoção {self.get_tipo_desconto_display()} #{self.pk}'
 
     def calcular_desconto(self, valor_base):
         return _aplicar_desconto(valor_base, self.tipo_desconto, self.valor)
 
+    @property
+    def especificidade(self):
+        if self.turma_id:
+            return 2
+        return 1 if (self.curso_id or self.graduacao_id) else 0
+
+
+class TaxaParcelamento(models.Model):
+    """Acréscimo repassado ao aluno ao parcelar no cartão.
+
+    Ex.: 12 parcelas com acréscimo de 15% → total = valor à vista × 1,15.
+    Número de parcelas sem linha cadastrada = sem acréscimo.
+    """
+
+    parcelas = models.PositiveSmallIntegerField('parcelas', unique=True)
+    acrescimo_percentual = models.DecimalField(
+        'acréscimo sobre o total (%)', max_digits=5, decimal_places=2
+    )
+
+    class Meta:
+        verbose_name = 'taxa de parcelamento'
+        verbose_name_plural = 'taxas de parcelamento'
+        ordering = ['parcelas']
+
+    def __str__(self):
+        return f'{self.parcelas}x: +{self.acrescimo_percentual}%'
+
     def clean(self):
-        if bool(self.turma_id) == bool(self.curso_id):
-            raise ValidationError('Vincule a promoção a exatamente uma Turma OU um Curso.')
-        if self.data_inicio and self.data_fim and self.data_fim < self.data_inicio:
-            raise ValidationError({'data_fim': 'A data de fim não pode ser anterior ao início.'})
+        from django.conf import settings
+        if self.parcelas is not None and not (2 <= self.parcelas <= settings.MAX_PARCELAS):
+            raise ValidationError(
+                {'parcelas': f'Use de 2 a {settings.MAX_PARCELAS} parcelas.'}
+            )
+
+
+class Aluno(models.Model):
+    """Pessoa que se matriculou. Sem login; identificada pelo CPF."""
+
+    nome = models.CharField('nome', max_length=80)
+    sobrenome = models.CharField('sobrenome', max_length=120)
+    cpf = models.CharField('CPF', max_length=11, unique=True, help_text='Somente dígitos.')
+    email = models.EmailField('email')
+    telefone = models.CharField('telefone', max_length=20)
+    asaas_customer_id = models.CharField('cliente no Asaas', max_length=60, blank=True)
+    criado_em = models.DateTimeField('cadastrado em', auto_now_add=True)
+
+    class Meta:
+        verbose_name = 'aluno'
+        verbose_name_plural = 'alunos'
+        ordering = ['nome', 'sobrenome']
+
+    def __str__(self):
+        return f'{self.nome_completo} ({self.cpf_formatado})'
+
+    @property
+    def nome_completo(self):
+        return f'{self.nome} {self.sobrenome}'.strip()
+
+    @property
+    def cpf_formatado(self):
+        c = self.cpf
+        return f'{c[:3]}.{c[3:6]}.{c[6:9]}-{c[9:]}' if len(c) == 11 else c
+
+
+def _novo_token():
+    return secrets.token_urlsafe(24)
 
 
 class Matricula(models.Model):
     class Status(models.TextChoices):
-        AGUARDANDO_PAGAMENTO = 'AGUARDANDO_PAGAMENTO', 'Aguardando pagamento'
-        AGUARDANDO_VALIDACAO = 'AGUARDANDO_VALIDACAO', 'Aguardando validação'
-        APROVADA = 'APROVADA', 'Aprovada'
-        REJEITADA = 'REJEITADA', 'Rejeitada'
+        PENDENTE = 'PENDENTE', 'Aguardando pagamento'
+        CONFIRMADA = 'CONFIRMADA', 'Confirmada'
+        EXPIRADA = 'EXPIRADA', 'Expirada (não paga)'
+        RECUSADA = 'RECUSADA', 'Pagamento recusado'
+        CANCELADA = 'CANCELADA', 'Cancelada (estornada)'
 
-    class MetodoPagamento(models.TextChoices):
+    class Metodo(models.TextChoices):
         PIX = 'PIX', 'PIX'
-        BOLETO = 'BOLETO', 'Boleto'
-        CARTAO = 'CARTAO', 'Cartão'
+        CARTAO = 'CARTAO', 'Cartão de crédito'
 
-    # O candidato é anônimo no início; a conta de Aluno só é criada na aprovação
-    # (V4), então o vínculo com Aluno é preenchido apenas nesse momento.
     aluno = models.ForeignKey(
-        'accounts.Aluno', on_delete=models.CASCADE, null=True, blank=True,
-        related_name='matriculas', verbose_name='aluno',
+        Aluno, on_delete=models.PROTECT, related_name='matriculas', verbose_name='aluno'
     )
     turma = models.ForeignKey(
-        'cursos.Turma', on_delete=models.CASCADE,
-        related_name='matriculas', verbose_name='turma',
-    )
-
-    # Dados pessoais informados pelo candidato no início do processo.
-    candidato_nome = models.CharField('nome do candidato', max_length=150)
-    candidato_email = models.EmailField('email do candidato')
-    candidato_cpf = models.CharField('CPF do candidato', max_length=14)
-    candidato_telefone = models.CharField('telefone do candidato', max_length=20, blank=True)
-    candidato_data_nascimento = models.DateField(
-        'data de nascimento do candidato', null=True, blank=True
+        'cursos.Turma', on_delete=models.PROTECT, related_name='matriculas', verbose_name='turma'
     )
     status = models.CharField(
-        'status', max_length=24, choices=Status.choices, default=Status.AGUARDANDO_PAGAMENTO
+        'status', max_length=12, choices=Status.choices, default=Status.PENDENTE
     )
-    metodo_pagamento = models.CharField(
-        'método de pagamento', max_length=10, choices=MetodoPagamento.choices, blank=True
-    )
-    valor_original = models.DecimalField('valor original', max_digits=10, decimal_places=2)
-    desconto_cupom = models.DecimalField(
-        'desconto por cupom', max_digits=10, decimal_places=2, default=Decimal('0.00')
-    )
+    metodo = models.CharField('forma de pagamento', max_length=8, choices=Metodo.choices)
+    parcelas = models.PositiveSmallIntegerField('parcelas', default=1)
+
+    # Valores (congelados no momento da compra)
+    valor_original = models.DecimalField('preço da turma', max_digits=10, decimal_places=2)
     desconto_promocao = models.DecimalField(
-        'desconto por promoção', max_digits=10, decimal_places=2, default=Decimal('0.00')
+        'desconto da promoção', max_digits=10, decimal_places=2, default=Decimal('0.00')
     )
-    valor_final = models.DecimalField('valor final', max_digits=10, decimal_places=2)
+    desconto_cupom = models.DecimalField(
+        'desconto do cupom', max_digits=10, decimal_places=2, default=Decimal('0.00')
+    )
+    valor_a_vista = models.DecimalField('valor à vista', max_digits=10, decimal_places=2)
+    valor_total = models.DecimalField(
+        'valor cobrado', max_digits=10, decimal_places=2,
+        help_text='Inclui o acréscimo do parcelamento, quando houver.',
+    )
     cupom = models.ForeignKey(
         Cupom, on_delete=models.SET_NULL, null=True, blank=True,
-        related_name='matriculas', verbose_name='cupom aplicado',
+        related_name='matriculas', verbose_name='cupom',
     )
     promocao = models.ForeignKey(
         Promocao, on_delete=models.SET_NULL, null=True, blank=True,
-        related_name='matriculas', verbose_name='promoção aplicada',
+        related_name='matriculas', verbose_name='promoção',
     )
-    asaas_payment_id = models.CharField('ID do pagamento (Asaas)', max_length=120, blank=True)
-    url_pagamento = models.URLField('URL do pagamento (boleto/QR PIX)', blank=True)
-    # Token seguro para upload de documentos/consulta de status sem autenticação.
-    upload_token = models.CharField(
-        'token de upload', max_length=64, unique=True, db_index=True, editable=False
+
+    # Pagamento (Asaas)
+    asaas_payment_id = models.CharField('cobrança no Asaas', max_length=60, blank=True, db_index=True)
+    asaas_installment_id = models.CharField('parcelamento no Asaas', max_length=60, blank=True)
+    pix_copia_cola = models.TextField('PIX copia e cola', blank=True)
+    pix_qrcode = models.TextField('QR Code PIX (base64)', blank=True)
+    reserva_expira_em = models.DateTimeField('reserva da vaga até', null=True, blank=True)
+
+    # Acompanhamento público (a página consulta o status por este token)
+    token = models.CharField(max_length=40, unique=True, default=_novo_token, editable=False)
+
+    termos_aceitos_em = models.DateTimeField('termos aceitos em')
+    ip = models.GenericIPAddressField('IP', null=True, blank=True)
+    observacao = models.TextField(
+        'observação', blank=True, help_text='Motivo de recusa/cancelamento, anotações internas.'
     )
-    motivo_rejeicao = models.TextField('motivo da rejeição', blank=True)
-    data_criacao = models.DateTimeField('criada em', auto_now_add=True)
+    criada_em = models.DateTimeField('criada em', auto_now_add=True)
+    confirmada_em = models.DateTimeField('confirmada em', null=True, blank=True)
+    cancelada_em = models.DateTimeField('cancelada em', null=True, blank=True)
 
     class Meta:
         verbose_name = 'matrícula'
         verbose_name_plural = 'matrículas'
-        ordering = ['-data_criacao']
+        ordering = ['-criada_em']
         constraints = [
-            # Um aluno não pode ter duas matrículas APROVADAS na mesma turma.
             models.UniqueConstraint(
-                fields=['aluno', 'turma'],
-                condition=models.Q(status='APROVADA'),
-                name='matricula_aprovada_unica_por_aluno_turma',
-            ),
-            # Idem por CPF do candidato (vínculo de Aluno só existe após aprovação).
-            models.UniqueConstraint(
-                fields=['candidato_cpf', 'turma'],
-                condition=models.Q(status='APROVADA'),
-                name='matricula_aprovada_unica_por_cpf_turma',
+                fields=['aluno', 'turma'], condition=models.Q(status='CONFIRMADA'),
+                name='matricula_confirmada_unica_por_aluno_turma',
             ),
         ]
 
     def __str__(self):
-        quem = self.aluno or self.candidato_nome
-        return f'{quem} → {self.turma} [{self.get_status_display()}]'
+        return f'{self.aluno.nome_completo} → {self.turma} [{self.get_status_display()}]'
 
-    @property
-    def ativa(self):
-        return self.status != self.Status.REJEITADA
-
-    @property
-    def token_valido(self):
-        """O token de upload expira quando a matrícula é APROVADA ou REJEITADA."""
-        return self.status in (
-            self.Status.AGUARDANDO_PAGAMENTO, self.Status.AGUARDANDO_VALIDACAO
+    def reserva_ativa(self, agora=None):
+        agora = agora or timezone.now()
+        return (
+            self.status == self.Status.PENDENTE
+            and self.reserva_expira_em is not None
+            and self.reserva_expira_em > agora
         )
 
     @property
-    def documentos_exigidos(self):
-        """Tipos de documento exigidos conforme o tipo do curso da turma."""
-        tipos = [Documento.Tipo.RG, Documento.Tipo.CPF]
-        if self.turma.curso.is_graduacao:
-            tipos.append(Documento.Tipo.HISTORICO_EM)
-        return tipos
+    def valor_parcela(self):
+        return (self.valor_total / self.parcelas).quantize(Decimal('0.01'))
 
-    def clean(self):
-        # Impede duas matrículas ativas (não rejeitadas) do mesmo CPF na mesma turma.
-        if self.candidato_cpf and self.turma_id:
-            ativas = Matricula.objects.filter(
-                candidato_cpf=self.candidato_cpf, turma=self.turma
-            ).exclude(status=self.Status.REJEITADA).exclude(pk=self.pk)
-            if ativas.exists():
-                raise ValidationError('Já existe uma matrícula ativa para este CPF nesta turma.')
 
-        # Ao aprovar, a turma precisa ter vaga disponível.
-        if self.status == self.Status.APROVADA and self.turma_id:
-            ocupadas = Matricula.objects.filter(
-                turma=self.turma, status=self.Status.APROVADA
-            ).exclude(pk=self.pk).count()
-            if ocupadas >= self.turma.vagas_totais:
-                raise ValidationError('A turma já atingiu o número de vagas totais.')
-
-        if self.status == self.Status.REJEITADA and not self.motivo_rejeicao:
-            raise ValidationError(
-                {'motivo_rejeicao': 'Informe o motivo ao rejeitar a matrícula.'}
+class VagaQuerySet(models.QuerySet):
+    def ocupando(self, agora=None):
+        """Vagas de matrículas confirmadas ou com reserva de pagamento válida."""
+        agora = agora or timezone.now()
+        return self.filter(
+            models.Q(matricula__status=Matricula.Status.CONFIRMADA)
+            | models.Q(
+                matricula__status=Matricula.Status.PENDENTE,
+                matricula__reserva_expira_em__gt=agora,
             )
-
-    def save(self, *args, **kwargs):
-        if not self.upload_token:
-            self.upload_token = secrets.token_urlsafe(32)
-        super().save(*args, **kwargs)
-        # Mantém o status da turma (ABERTA/FECHADA) sincronizado com as vagas.
-        self.turma.sincronizar_status_vagas()
+        )
 
 
-class Documento(models.Model):
-    class Tipo(models.TextChoices):
-        RG = 'RG', 'RG'
-        CPF = 'CPF', 'CPF'
-        HISTORICO_EM = 'HISTORICO_EM', 'Histórico do Ensino Médio'
+class Vaga(models.Model):
+    """Lugar ocupado por uma matrícula em uma turma de curso.
 
-    class Status(models.TextChoices):
-        PENDENTE = 'PENDENTE', 'Pendente'
-        APROVADO = 'APROVADO', 'Aprovado'
-        REJEITADO = 'REJEITADO', 'Rejeitado'
+    Matrícula em curso avulso → 1 vaga. Matrícula em graduação → 1 vaga em
+    cada turma de curso do pacote que ainda não terminou.
+    """
 
     matricula = models.ForeignKey(
-        Matricula, on_delete=models.CASCADE, related_name='documentos', verbose_name='matrícula'
+        Matricula, on_delete=models.CASCADE, related_name='vagas', verbose_name='matrícula'
     )
-    tipo = models.CharField('tipo', max_length=15, choices=Tipo.choices)
-    arquivo = models.FileField('arquivo', upload_to='documentos/', storage=documento_storage)
-    status = models.CharField(
-        'status', max_length=10, choices=Status.choices, default=Status.PENDENTE
+    turma = models.ForeignKey(
+        'cursos.Turma', on_delete=models.PROTECT, related_name='ocupacoes',
+        limit_choices_to={'curso__isnull': False}, verbose_name='turma de curso',
     )
+
+    objects = VagaQuerySet.as_manager()
 
     class Meta:
-        verbose_name = 'documento'
-        verbose_name_plural = 'documentos'
+        verbose_name = 'vaga'
+        verbose_name_plural = 'vagas'
+        constraints = [
+            models.UniqueConstraint(fields=['matricula', 'turma'], name='vaga_unica_por_matricula_turma'),
+        ]
 
     def __str__(self):
-        return f'{self.get_tipo_display()} — {self.matricula}'
+        return f'{self.turma} — {self.matricula.aluno.nome_completo}'

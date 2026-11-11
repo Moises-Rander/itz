@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link, NavLink, useLocation } from 'react-router-dom'
-import { Menu, ChevronDown, UserRound } from 'lucide-react'
+import { Menu, ChevronDown, GraduationCap } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -18,7 +18,6 @@ import {
 } from '@/components/ui/sheet'
 import { NAV_LINKS } from '@/lib/navigation'
 import { cn } from '@/lib/utils'
-import { useAuthStore } from '@/stores/useAuthStore'
 import Logo from './Logo'
 
 export default function Navbar() {
@@ -26,15 +25,6 @@ export default function Navbar() {
   const [scrolled, setScrolled] = useState(false)
   const isHome = pathname === '/'
   const solid = scrolled || !isHome
-
-  // Destino do botão "Portal do Aluno" conforme autenticação/perfil.
-  const access = useAuthStore((s) => s.access)
-  const user = useAuthStore((s) => s.user)
-  const portalDestino = !access
-    ? '/login'
-    : user?.role === 'PROFESSOR'
-    ? '/portal-professor/dashboard'
-    : '/portal/dashboard'
 
   useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 24)
@@ -97,9 +87,9 @@ export default function Navbar() {
 
         <div className="flex items-center gap-2">
           <Button asChild className="hidden sm:inline-flex" size="sm">
-            <Link to={portalDestino}>
-              <UserRound className="mr-1 h-4 w-4" />
-              Portal do Aluno
+            <Link to="/cursos">
+              <GraduationCap className="mr-1 h-4 w-4" />
+              Matricule-se
             </Link>
           </Button>
 
@@ -151,7 +141,7 @@ export default function Navbar() {
                 ))}
                 <SheetClose asChild>
                   <Button asChild className="mt-4">
-                    <Link to={portalDestino}>Portal do Aluno</Link>
+                    <Link to="/cursos">Matricule-se</Link>
                   </Button>
                 </SheetClose>
               </div>
