@@ -3,6 +3,7 @@ import { Badge } from '@/components/ui/badge'
 import { EmptyState } from '@/components/common/StateComponents'
 import TurmaOferta from '@/components/catalogo/TurmaOferta'
 import ProfessoresGrid from '@/components/catalogo/ProfessoresGrid'
+import Seo from '@/components/common/Seo'
 
 // Seções compartilhadas pelas páginas de detalhe de Curso e de Formação.
 const container = 'mx-auto max-w-6xl px-4 sm:px-6 lg:px-8'
@@ -10,6 +11,7 @@ const container = 'mx-auto max-w-6xl px-4 sm:px-6 lg:px-8'
 export function Cabecalho({ badge, nome, info, descricao, imagem }) {
   return (
     <section className="border-b bg-muted/40">
+      <Seo titulo={nome} descricao={descricao} imagem={imagem} />
       <div className={`${container} grid gap-8 py-12 lg:grid-cols-2`}>
         <div>
           <Badge variant="secondary">{badge}</Badge>

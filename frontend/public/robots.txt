@@ -1,0 +1,4 @@
+User-agent: *
+Disallow: /matricula/
+
+Sitemap: https://itzait.com.br/sitemap.xml

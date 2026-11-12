@@ -13,6 +13,7 @@ import Checkout from '@/pages/Checkout'
 import StatusMatricula from '@/pages/StatusMatricula'
 import Termos from '@/pages/Termos'
 import NotFound from '@/pages/NotFound'
+import Seo from '@/components/common/Seo'
 
 // Links antigos (/graduacoes/...) continuam funcionando.
 function RedirecionaFormacao() {
@@ -36,17 +37,17 @@ export default function App() {
       <BrowserRouter>
         <Routes>
           <Route element={<Layout />}>
-            <Route path="/" element={<Home />} />
-            <Route path="/cursos" element={<Catalogo />} />
+            <Route path="/" element={<><Seo /><Home /></>} />
+            <Route path="/cursos" element={<><Seo titulo="Cursos e formações" descricao="Conheça os cursos e as formações em teologia do Instituto de Teologia Zait, com turmas em São Luís - MA." /><Catalogo /></>} />
             <Route path="/cursos/:slug" element={<CursoDetalhe />} />
             <Route path="/formacoes/:slug" element={<FormacaoDetalhe />} />
             <Route path="/graduacoes/:slug" element={<RedirecionaFormacao />} />
-            <Route path="/sobre" element={<Sobre />} />
-            <Route path="/contato" element={<Contato />} />
-            <Route path="/termos" element={<Termos />} />
-            <Route path="/matricula/status/:token" element={<StatusMatricula />} />
-            <Route path="/matricula/:turmaId" element={<Checkout />} />
-            <Route path="*" element={<NotFound />} />
+            <Route path="/sobre" element={<><Seo titulo="Sobre" /><Sobre /></>} />
+            <Route path="/contato" element={<><Seo titulo="Contato" descricao="Fale com o Instituto de Teologia Zait: telefone, WhatsApp, e-mail e endereço em São Luís - MA." /><Contato /></>} />
+            <Route path="/termos" element={<><Seo titulo="Termos de uso" /><Termos /></>} />
+            <Route path="/matricula/status/:token" element={<><Seo titulo="Status da matrícula" noindex /><StatusMatricula /></>} />
+            <Route path="/matricula/:turmaId" element={<><Seo titulo="Matrícula" noindex /><Checkout /></>} />
+            <Route path="*" element={<><Seo titulo="Página não encontrada" noindex /><NotFound /></>} />
           </Route>
         </Routes>
       </BrowserRouter>
