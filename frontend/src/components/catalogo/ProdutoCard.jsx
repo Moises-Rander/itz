@@ -22,7 +22,8 @@ export default function ProdutoCard({ item }) {
             <GraduationCap className="h-10 w-10" />
           </div>
         )}
-        <Badge className="absolute left-3 top-3" variant={item.tipo === 'formacao' ? 'default' : 'secondary'}>
+        {/* Fundo escuro translúcido: legível sobre qualquer foto, clara ou escura. */}
+        <Badge className="absolute left-3 top-3 bg-black/60 px-2 py-1 text-white backdrop-blur-sm">
           {tipoLabel(item.tipo)}
         </Badge>
       </Link>
