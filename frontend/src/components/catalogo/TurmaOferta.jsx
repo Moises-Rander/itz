@@ -12,12 +12,12 @@ const horariosLabel = (horarios) =>
     ? horarios.map((h) => `${h.dia} ${h.inicio}–${h.fim}`).join(' · ')
     : 'Horários a definir'
 
-// Uma turma disponível: período, horários, professores, vagas, preço e matrícula.
+// Uma turma disponível (card vertical, feito para a coluna lateral): período, horários, professores, vagas, preço e matrícula.
 export default function TurmaOferta({ turma }) {
   return (
     <Card>
       <CardContent>
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="flex flex-col gap-4">
           <div className="space-y-1 text-sm text-muted-foreground">
             <div className="mb-2 flex flex-wrap items-center gap-2">
               <h3 className="text-lg font-semibold text-foreground">Turma {turma.codigo}</h3>
@@ -40,9 +40,9 @@ export default function TurmaOferta({ turma }) {
               <MapPin className="h-4 w-4 shrink-0" /> Presencial — {CONTATO.endereco}
             </p>
           </div>
-          <div className="flex flex-col items-start gap-3 sm:items-end sm:text-right">
+          <div className="flex flex-col gap-3 border-t pt-4">
             <Preco preco={turma.preco} grande />
-            <Button asChild size="lg">
+            <Button asChild size="lg" className="w-full">
               <Link to={`/matricula/${turma.id}`}>
                 <GraduationCap className="mr-2 h-5 w-5" /> Matricular-se
               </Link>

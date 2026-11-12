@@ -1,7 +1,7 @@
 import { useParams } from 'react-router-dom'
 import { Clock, BookOpen, PlayCircle } from 'lucide-react'
 import { Spinner, ErrorState } from '@/components/common/StateComponents'
-import { Cabecalho, Turmas, Professores } from '@/components/catalogo/DetalheSecoes'
+import { Cabecalho, LayoutDetalhe } from '@/components/catalogo/DetalheSecoes'
 import ListaAulas from '@/components/catalogo/ListaAulas'
 import { useCurso } from '@/hooks/useCatalogo'
 import { cargaHorariaLabel } from '@/lib/format'
@@ -31,19 +31,14 @@ export default function CursoDetalhe() {
           </>
         }
       />
-      <div className={`${container} pt-12`}>
-        {curso.aulas.length > 0 && (
-          <section>
-            <h2 className="mb-5 flex items-center gap-2 text-2xl font-bold">
-              <BookOpen className="h-6 w-6 text-primary" /> Aulas
-            </h2>
-            <ListaAulas aulas={curso.aulas} />
-          </section>
-        )}
-
-        <Turmas turmas={curso.turmas} />
-        <Professores turmas={curso.turmas} />
-      </div>
+      <LayoutDetalhe turmas={curso.turmas}>
+        <section>
+          <h2 className="mb-5 flex items-center gap-2 text-2xl font-bold">
+            <BookOpen className="h-6 w-6 text-primary" /> Aulas
+          </h2>
+          <ListaAulas aulas={curso.aulas} />
+        </section>
+      </LayoutDetalhe>
     </div>
   )
 }

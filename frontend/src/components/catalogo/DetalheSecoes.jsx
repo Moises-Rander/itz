@@ -23,11 +23,27 @@ export function Cabecalho({ badge, nome, info, descricao, imagem }) {
   )
 }
 
+// Desktop: conteúdo à esquerda; turmas e professores numa coluna à direita.
+// Celular: turmas → conteúdo → professores (a matrícula fica logo no topo).
+export function LayoutDetalhe({ children, turmas }) {
+  return (
+    <div className={`${container} grid gap-12 pt-12 lg:grid-cols-3 lg:grid-rows-[auto_1fr] lg:gap-x-10`}>
+      <div className="lg:col-start-3 lg:row-start-1">
+        <Turmas turmas={turmas} />
+      </div>
+      <div className="min-w-0 lg:col-span-2 lg:col-start-1 lg:row-span-2 lg:row-start-1">{children}</div>
+      <div className="lg:col-start-3 lg:row-start-2">
+        <Professores turmas={turmas} />
+      </div>
+    </div>
+  )
+}
+
 export function Turmas({ turmas }) {
   return (
-    <section className="mt-12">
-      <h2 className="mb-5 flex items-center gap-2 text-2xl font-bold">
-        <Users className="h-6 w-6 text-primary" /> Turmas com matrícula aberta
+    <section>
+      <h2 className="mb-5 flex items-center gap-2 text-xl font-bold">
+        <Users className="h-5 w-5 text-primary" /> Turmas com matrícula aberta
       </h2>
       {turmas.length === 0 ? (
         <EmptyState message="Nenhuma turma aberta no momento. Volte em breve!" />
@@ -45,9 +61,9 @@ export function Professores({ turmas }) {
   turmas.forEach((t) => t.professores.forEach((p) => unicos.set(p.id, p)))
   if (unicos.size === 0) return null
   return (
-    <section className="mt-12">
-      <h2 className="mb-5 text-2xl font-bold">Professores</h2>
-      <ProfessoresGrid professores={[...unicos.values()]} comBio />
+    <section>
+      <h2 className="mb-5 text-xl font-bold">Professores</h2>
+      <ProfessoresGrid professores={[...unicos.values()]} comBio coluna />
     </section>
   )
 }

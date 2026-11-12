@@ -1,10 +1,11 @@
 import { UserRound } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
 
-export default function ProfessoresGrid({ professores, comBio }) {
+// coluna: uma por linha (para a coluna lateral das páginas de detalhe).
+export default function ProfessoresGrid({ professores, comBio, coluna }) {
   if (!professores?.length) return null
   return (
-    <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+    <div className={coluna ? 'grid gap-4' : 'grid gap-6 sm:grid-cols-2 lg:grid-cols-3'}>
       {professores.map((p) => (
         <Card key={p.id}>
           <CardContent className="flex gap-4">

@@ -1,39 +1,39 @@
 import { useParams } from 'react-router-dom'
-import { Clock, Layers, PlayCircle } from 'lucide-react'
-import { Card, CardContent } from '@/components/ui/card'
+import { ChevronDown, Clock, Layers, PlayCircle } from 'lucide-react'
 import { Spinner, ErrorState } from '@/components/common/StateComponents'
-import { Cabecalho, Turmas, Professores } from '@/components/catalogo/DetalheSecoes'
+import { Cabecalho, LayoutDetalhe } from '@/components/catalogo/DetalheSecoes'
 import ListaAulas from '@/components/catalogo/ListaAulas'
 import { useFormacao } from '@/hooks/useCatalogo'
 import { cargaHorariaLabel } from '@/lib/format'
 
 const container = 'mx-auto max-w-6xl px-4 sm:px-6 lg:px-8'
 
+// Módulos recolhidos por padrão: clicar abre a lista de aulas.
 function Grade({ modulos }) {
-  if (!modulos.length) return null
   return (
     <section>
       <h2 className="mb-5 flex items-center gap-2 text-2xl font-bold">
         <Layers className="h-6 w-6 text-primary" /> Grade curricular
       </h2>
-      <ol className="space-y-4">
+      {!modulos.length && <p className="text-sm text-muted-foreground">Grade a definir.</p>}
+      <ol className="divide-y overflow-hidden empty:hidden rounded-xl border bg-card">
         {modulos.map((m) => (
           <li key={m.ordem}>
-            <Card>
-              <CardContent>
-                <div className="flex gap-4">
-                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary text-sm font-bold text-primary-foreground">
-                    {m.ordem}
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <p className="font-semibold">{m.nome}</p>
-                    <div className="mt-3">
-                      <ListaAulas aulas={m.aulas} />
-                    </div>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
+            <details className="group">
+              <summary className="flex cursor-pointer list-none items-center gap-3 px-4 py-3 transition-colors hover:bg-muted/50 [&::-webkit-details-marker]:hidden">
+                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-bold text-primary-foreground">
+                  {m.ordem}
+                </span>
+                <span className="min-w-0 flex-1 font-medium">{m.nome}</span>
+                <span className="hidden shrink-0 text-sm text-muted-foreground sm:inline">
+                  {m.aulas.length} aula{m.aulas.length === 1 ? '' : 's'}
+                </span>
+                <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" />
+              </summary>
+              <div className="px-4 pb-4 sm:pl-14">
+                <ListaAulas aulas={m.aulas} />
+              </div>
+            </details>
           </li>
         ))}
       </ol>
@@ -67,11 +67,9 @@ export default function FormacaoDetalhe() {
           </>
         }
       />
-      <div className={`${container} pt-12`}>
+      <LayoutDetalhe turmas={formacao.turmas}>
         <Grade modulos={formacao.modulos} />
-        <Turmas turmas={formacao.turmas} />
-        <Professores turmas={formacao.turmas} />
-      </div>
+      </LayoutDetalhe>
     </div>
   )
 }
